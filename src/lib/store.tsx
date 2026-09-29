@@ -77,6 +77,10 @@ interface StoreValue {
   setAudience: (messageId: string, audience: Audience) => void;
   setEvents: (messageId: string, events: StaffEventType[]) => void;
   removeMention: (messageId: string, mention: string) => void;
+  /** attach an employee to a message by hand (spec 34/44) */
+  addSubject: (messageId: string, employeeId: string) => void;
+  /** detach a manually attached employee */
+  removeSubject: (messageId: string, employeeId: string) => void;
   setNameOverride: (whatsappName: string, employeeId: string | 'reject' | null) => void;
   dismissRecord: (auditId: string) => void;
   setAdminReview: (auditId: string, entry: AdminReviewEntry | null) => void;
@@ -418,6 +422,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const addSubject = useCallback((messageId: string, employeeId: string) => {
+    setCorrections((current) => {
+      const existing = current.addedSubjects[messageId] ?? [];
+      if (existing.includes(employeeId)) return current;
+      return {
+        ...current,
+        addedSubjects: { ...current.addedSubjects, [messageId]: [...existing, employeeId] },
+      };
+    });
+  }, []);
+
+  const removeSubject = useCallback((messageId: string, employeeId: string) => {
+    setCorrections((current) => {
+      const existing = current.addedSubjects[messageId] ?? [];
+      if (!existing.includes(employeeId)) return current;
+      const next = existing.filter((entry) => entry !== employeeId);
+      const addedSubjects = { ...current.addedSubjects };
+      if (next.length === 0) delete addedSubjects[messageId];
+      else addedSubjects[messageId] = next;
+      return { ...current, addedSubjects };
+    });
+  }, []);
+
   const setNameOverride = useCallback(
     (whatsappName: string, employeeId: string | 'reject' | null) => {
       setCorrections((current) => {
@@ -495,6 +522,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setAudience,
       setEvents,
       removeMention,
+      addSubject,
+      removeSubject,
       setNameOverride,
       dismissRecord,
       setAdminReview,
@@ -518,6 +547,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       removeAlias,
       removeFile,
       removeMention,
+      addSubject,
+      removeSubject,
       resetCorrections,
       resetSettings,
       result,

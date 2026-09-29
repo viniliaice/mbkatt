@@ -71,6 +71,12 @@ export interface AuditContext {
   staffReportDates: Set<string>;
   /** all dates in the audited period */
   dates: string[];
+  /**
+   * messageId -> employee ids an administrator attached to the message by hand
+   * in the Review Center (Corrections.addedSubjects, spec 34/44). These are
+   * treated exactly like a resolved mention, never as a guess.
+   */
+  subjectAdditions?: Record<string, string[]>;
 }
 
 export interface AuditOutput {
@@ -140,6 +146,8 @@ export function buildAudit(context: AuditContext): AuditOutput {
     nameLookup.set(normalizeName(match.whatsappName), match);
   }
 
+  const employeesById = new Map(context.employees.map((employee) => [employee.id, employee]));
+
   const messagesByEmployeeDate = new Map<string, WhatsAppMessage[]>();
   /** event-row ids per audit key, so the report can show the final verdict */
   const eventRowsByKey = new Map<string, WhatsAppEventRow[]>();
@@ -152,6 +160,36 @@ export function buildAudit(context: AuditContext): AuditOutput {
     if (!isAuditableMessage(message, settings)) continue;
 
     const subjects = resolveSubjectEmployees(message, nameLookup);
+
+    /* Manual subject additions (spec 34/44): an administrator attached this
+       employee to the message. The attribution is explicit, so it is recorded
+       as a manual 100%-confidence match rather than a heuristic one. */
+    for (const employeeId of context.subjectAdditions?.[message.id] ?? []) {
+      if (subjects.some((subject) => subject.match?.employeeId === employeeId)) continue;
+      const employee = employeesById.get(employeeId);
+      if (!employee) continue;
+      subjects.push({
+        name: employee.name,
+        isSelf: false,
+        match: {
+          id: `manual-${message.id}-${employeeId}`,
+          whatsappName: employee.name,
+          employeeId: employee.id,
+          employeeName: employee.name,
+          employeeCode: employee.employeeCode,
+          department: employee.department,
+          confidence: 100,
+          tier: 'matched',
+          method: 'Manual attribution in the Review Center',
+          reasons: [
+            'An administrator attached this employee to the message by hand; no automatic matching was involved.',
+          ],
+          alternatives: [],
+          occurrences: 1,
+          manual: true,
+        },
+      });
+    }
     const events: StaffEventType[] =
       message.classification.events.length > 0
         ? message.classification.events.map((event) => event.type)

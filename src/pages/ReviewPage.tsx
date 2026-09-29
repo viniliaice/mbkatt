@@ -1,9 +1,29 @@
-import { CheckCircle2, ClipboardCheck, RefreshCw, RotateCcw, ShieldQuestion, XCircle } from 'lucide-react';
+import {
+  CheckCircle2,
+  ClipboardCheck,
+  RefreshCw,
+  RotateCcw,
+  ShieldQuestion,
+  UserPlus,
+  XCircle,
+} from 'lucide-react';
 import * as React from 'react';
 import { PageHeader } from '@/components/AppShell';
 import { EvidenceModal } from '@/components/EvidencePanel';
 import { AudienceBadge, ConfidenceBadge, TierBadge } from '@/components/StatusBadges';
-import { Alert, Badge, Button, Card, CardContent, Checkbox, EmptyState, Input, Separator, Tabs } from '@/components/ui';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  Checkbox,
+  EmptyState,
+  Input,
+  Select,
+  Separator,
+  Tabs,
+} from '@/components/ui';
 import { EVENT_FILTER_ORDER, EVENT_LABELS } from '@/lib/statuses';
 import { useStore } from '@/lib/store';
 import type {
@@ -39,8 +59,8 @@ const TYPE_ORDER: ReviewIssueType[] = [
   'unparsed_message',
 ];
 
-function MessageActions({ message }: { message: WhatsAppMessage }) {
-  const { setAudience, setEvents, removeMention, corrections } = useStore();
+function MessageActions({ message, result }: { message: WhatsAppMessage; result: AnalysisResult }) {
+  const { setAudience, setEvents, removeMention, addSubject, removeSubject, corrections } = useStore();
   const audience: Audience = corrections.audience[message.id] ?? message.classification.audience;
   const events: StaffEventType[] = corrections.events[message.id] ?? message.classification.events.map((event) => event.type);
   const removed = corrections.removedMentions[message.id] ?? [];
@@ -139,6 +159,90 @@ function MessageActions({ message }: { message: WhatsAppMessage }) {
           </p>
         </div>
       ) : null}
+
+      <SubjectAttach message={message} result={result} onAdd={addSubject} onRemove={removeSubject} />
+    </div>
+  );
+}
+
+/**
+ * Manual attribution (spec 34/44): attach an employee to a message the matcher
+ * could not resolve. The attribution is explicit — it is never presented as an
+ * automatic match, and the attached employee shows it in their own record.
+ */
+function SubjectAttach({
+  message,
+  result,
+  onAdd,
+  onRemove,
+}: {
+  message: WhatsAppMessage;
+  result: AnalysisResult;
+  onAdd: (messageId: string, employeeId: string) => void;
+  onRemove: (messageId: string, employeeId: string) => void;
+}) {
+  const { corrections } = useStore();
+  const attached = corrections.addedSubjects[message.id] ?? [];
+  const [selected, setSelected] = React.useState('');
+  const employees = [...result.attendanceEmployees].sort((a, b) => a.name.localeCompare(b.name));
+
+  return (
+    <div>
+      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+        Attach an employee by hand
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          value={selected}
+          onChange={(event) => setSelected(event.target.value)}
+          aria-label="Employee to attach to this message"
+          className="w-[280px]"
+        >
+          <option value="">Choose an employee…</option>
+          {employees.map((employee) => (
+            <option key={employee.id} value={employee.id}>
+              {employee.name}
+              {employee.employeeCode ? ` (${employee.employeeCode})` : ''}
+            </option>
+          ))}
+        </Select>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!selected}
+          onClick={() => {
+            onAdd(message.id, selected);
+            setSelected('');
+          }}
+        >
+          <UserPlus /> Attach
+        </Button>
+        {attached.map((employeeId) => {
+          const employee = employees.find((entry) => entry.id === employeeId);
+          return (
+            <span
+              key={employeeId}
+              className="inline-flex items-center gap-2 rounded-full border border-[var(--primary)] bg-[var(--primary)]/10 px-3 py-1 text-xs"
+            >
+              {employee?.name ?? employeeId}
+              <Badge tone="neutral">manual</Badge>
+              <button
+                type="button"
+                className="text-red-600 hover:underline dark:text-red-400"
+                onClick={() => onRemove(message.id, employeeId)}
+                aria-label={`Detach ${employee?.name ?? employeeId}`}
+              >
+                detach
+              </button>
+            </span>
+          );
+        })}
+      </div>
+      <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+        Use this when the message clearly concerns an employee the matcher could not resolve (a nick-name, a spelling
+        that is not obvious, a student reporting on a teacher's behalf). The attribution is recorded as manual and is
+        never a guess.
+      </p>
     </div>
   );
 }
@@ -443,7 +547,7 @@ function IssueCard({
       ) : null}
 
       {(issue.type === 'uncertain_classification' || issue.type === 'unknown_event') && message ? (
-        <MessageActions message={message} />
+        <MessageActions message={message} result={result} />
       ) : null}
 
       {issue.type === 'uncertain_name_match' ? <NameMatchActions issue={issue} result={result} /> : null}

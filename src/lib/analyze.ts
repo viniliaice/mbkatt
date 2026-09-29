@@ -256,6 +256,8 @@ export function analyze(options: AnalyzeOptions): AnalysisResult {
     attendanceDates,
     staffReportDates,
     dates,
+    /* Employees an administrator attached to a message by hand (spec 34/44) */
+    subjectAdditions: corrections.addedSubjects,
   });
 
   let auditRecords = auditOutput.auditRecords;

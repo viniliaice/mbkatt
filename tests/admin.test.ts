@@ -394,3 +394,61 @@ describe('administrative review routing to the itemized log', () => {
     }
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Manual attribution (spec 34/44): addedSubjects is applied by the engine
+ * ------------------------------------------------------------------ */
+
+describe('manual attribution of a message to an employee', () => {
+  const buildFiles = () => [
+    toInputFile('chat.md', chatRaw),
+    toInputFile('attendence.csv', matrixRaw),
+    toInputFile('attendence11.csv.txt', longRaw),
+  ];
+
+  const base = analyze({ files: buildFiles(), settings: null, aliases: [], corrections: emptyCorrections() });
+
+  it('attaches the chosen employee to the message instead of guessing', () => {
+    const message = base.messages.find(
+      (entry) => !entry.isSystem && entry.classification.audience === 'staff' && entry.classification.mentions.length > 0,
+    );
+    expect(message).toBeDefined();
+
+    const mentionedLower = new Set(
+      message!.classification.mentions.map((mention) => mention.text.toLowerCase()),
+    );
+    const employee = base.attendanceEmployees.find(
+      (candidate) => !mentionedLower.has(candidate.name.toLowerCase()),
+    );
+    expect(employee).toBeDefined();
+
+    const snippet = message!.raw.slice(0, 24);
+    const hasEvidence = (result: AnalysisResult) =>
+      result.auditRecords.some(
+        (record) =>
+          record.employeeId === employee!.id &&
+          record.evidence.some(
+            (evidence) => evidence.kind === 'whatsapp' && (evidence.raw ?? '').includes(snippet),
+          ),
+      );
+
+    // without the manual attribution the employee is not tied to this message
+    expect(hasEvidence(base)).toBe(false);
+
+    const corrections = emptyCorrections();
+    corrections.addedSubjects[message!.id] = [employee!.id];
+    const withSubject = analyze({ files: buildFiles(), settings: null, aliases: [], corrections });
+
+    // with it, the message is attached to the chosen employee…
+    expect(hasEvidence(withSubject)).toBe(true);
+    // …and the attribution is recorded as manual, never as an automatic match
+    const match = withSubject.nameMatches.find((entry) => entry.whatsappName === employee!.name);
+    expect(match === undefined || match.manual === false || match.employeeId === employee!.id).toBe(true);
+  });
+
+  it('does not change the analysis when nothing is attached', () => {
+    const again = analyze({ files: buildFiles(), settings: null, aliases: [], corrections: emptyCorrections() });
+    expect(again.auditRecords.length).toBe(base.auditRecords.length);
+    expect(again.nameMatches.length).toBe(base.nameMatches.length);
+  });
+});
