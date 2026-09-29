@@ -1,0 +1,8 @@
+Employee,Date,Clock In,Clock Out,Total Hours,Status
+Abdiqadir Maxamed,2026-09-14,06:40,15:05,8:25,Present
+Abdiqadir Maxamed,2026-09-15,06:48,15:02,8:14,Late
+Fardosa Kamal,2026-09-14,06:21,15:00,8:39,Present
+Fardosa Kamal,2026-09-15,06:22,15:01,8:39,Present
+Ikram Axmed,2026-09-15,06:30,12:00,5:30,Present
+Ahmed Jaamac Ism,2026-09-15,07:05,15:00,7:55,Late
+Nuha Cali,2026-09-14,n/a,,,Absent
