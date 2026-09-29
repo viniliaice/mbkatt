@@ -17,6 +17,7 @@ import {
   weekdayIndex,
 } from './dates';
 import { parseAttendanceFile, type AttendanceParseResult } from './parsers/attendance';
+import { parseExcelWorkbook } from './parsers/excelWorkbook';
 import { parseWhatsAppExport, type WhatsAppParseDiagnostics } from './parsers/whatsapp';
 import { buildAudit, isAuditableMessage, UNMATCHED_PREFIX } from './audit';
 import { reclassifyMessage, type ClassifyContext } from './classify';
@@ -91,13 +92,42 @@ export function analyze(options: AnalyzeOptions): AnalysisResult {
   for (const file of options.files) {
     const kind = file.meta.kindOverride ?? file.meta.kind;
     if (kind === 'attendance') {
-      const result = parseAttendanceFile(file.text, {
-        fileId: file.meta.id,
-        fileName: file.meta.name,
-        dateOrder: settings.attendanceDateOrder,
-        fallbackYear: settings.fallbackYear,
-        rows: file.rows,
-      });
+      let result: AttendanceParseResult;
+      if (file.workbookData) {
+        result = {
+          employees: file.workbookData.employees,
+          records: file.workbookData.records,
+          summary: file.workbookData.summary,
+          punches: file.workbookData.punches,
+          warnings: file.workbookData.warnings,
+          problems: file.workbookData.problems,
+        };
+      } else if (file.buffer) {
+        const wbResult = parseExcelWorkbook(file.buffer, {
+          fileId: file.meta.id,
+          fileName: file.meta.name,
+          dateOrder: settings.attendanceDateOrder,
+          fallbackYear: settings.fallbackYear,
+        });
+        file.workbookData = wbResult;
+        file.meta.excelWorkbookMeta = wbResult.meta;
+        result = {
+          employees: wbResult.employees,
+          records: wbResult.records,
+          summary: wbResult.summary,
+          punches: wbResult.punches,
+          warnings: wbResult.warnings,
+          problems: wbResult.problems,
+        };
+      } else {
+        result = parseAttendanceFile(file.text, {
+          fileId: file.meta.id,
+          fileName: file.meta.name,
+          dateOrder: settings.attendanceDateOrder,
+          fallbackYear: settings.fallbackYear,
+          rows: file.rows,
+        });
+      }
       attendanceResults.push({ file, result });
       warnings.push(...result.warnings.map((warning) => `${file.meta.name}: ${warning}`));
     } else if (kind === 'whatsapp') {
@@ -519,12 +549,18 @@ export function mergeAttendance(
           rawRow: { ...employee.rawRow },
           rowNumbers: { ...employee.rowNumbers },
           sourceFileIds: [...employee.sourceFileIds],
+          sourceSheets: employee.sourceSheets ? [...employee.sourceSheets] : [],
         };
         canonical.push(target);
       } else {
         target.sourceFileIds = [
           ...new Set([...target.sourceFileIds, ...employee.sourceFileIds]),
         ];
+        if (employee.sourceSheets) {
+          target.sourceSheets = [
+            ...new Set([...(target.sourceSheets ?? []), ...employee.sourceSheets]),
+          ];
+        }
         target.department = target.department ?? employee.department;
         target.employeeCode = target.employeeCode ?? employee.employeeCode;
         target.rowNumbers = { ...target.rowNumbers, ...employee.rowNumbers };
@@ -761,6 +797,10 @@ function buildValidation(params: {
       for (const problem of attendance.result.problems) {
         fileWarnings.push(`${problem.message}${problem.rowNumber ? ` (row ${problem.rowNumber})` : ''}`);
       }
+      const wbMeta = file.workbookData?.meta ?? file.meta.excelWorkbookMeta;
+      const attendanceLogs = wbMeta?.punchCount ?? summaryFile.punchCount;
+      const exceptions = wbMeta?.exceptionCount ?? 0;
+      const statisticalRecords = wbMeta?.statisticalRecordCount ?? 0;
       return {
         fileId: file.meta.id,
         fileName: file.meta.name,
@@ -776,6 +816,11 @@ function buildValidation(params: {
         previewRaw,
         previewParsed: attendance.result.records.slice(0, 20).map(describeParsedRecord),
         critical: false,
+        excelWorkbookMeta: wbMeta,
+        excelWorkbookResult: file.workbookData,
+        attendanceLogs,
+        exceptions,
+        statisticalRecords,
       };
     }
 

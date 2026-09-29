@@ -343,6 +343,50 @@ export function AdministrativeReportPage() {
       render: (row) => <span className="tabular-nums">{row.totalLateMinutes}</span>,
     },
     {
+      key: 'notifiedLate',
+      header: 'Notified Late',
+      value: (row) => row.notifiedLate,
+      render: (row) =>
+        row.notifiedLate === 0 ? (
+          <span className="text-[var(--muted-foreground)]">0</span>
+        ) : (
+          <Badge tone="info">{row.notifiedLate}</Badge>
+        ),
+    },
+    {
+      key: 'unnotifiedLate',
+      header: 'Unnotified Late',
+      value: (row) => row.unnotifiedLate,
+      render: (row) =>
+        row.unnotifiedLate === 0 ? (
+          <span className="text-[var(--muted-foreground)]">0</span>
+        ) : (
+          <Badge tone="danger">{row.unnotifiedLate}</Badge>
+        ),
+    },
+    {
+      key: 'notifiedAbsence',
+      header: 'Notified Absence',
+      value: (row) => row.notifiedAbsence,
+      render: (row) =>
+        row.notifiedAbsence === 0 ? (
+          <span className="text-[var(--muted-foreground)]">0</span>
+        ) : (
+          <Badge tone="info">{row.notifiedAbsence}</Badge>
+        ),
+    },
+    {
+      key: 'unnotifiedAbsence',
+      header: 'Unnotified Absence',
+      value: (row) => row.unnotifiedAbsence,
+      render: (row) =>
+        row.unnotifiedAbsence === 0 ? (
+          <span className="text-[var(--muted-foreground)]">0</span>
+        ) : (
+          <Badge tone="danger">{row.unnotifiedAbsence}</Badge>
+        ),
+    },
+    {
       key: 'rate',
       header: 'Attendance Rate (%)',
       value: (row) => row.attendanceRate ?? -1,
