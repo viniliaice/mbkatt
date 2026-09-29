@@ -147,6 +147,9 @@ describe('UI smoke tests with a real analysis result', () => {
     expect(html).toContain('Employee name');
     expect(html).toContain('WhatsApp original message');
     expect(html).toContain('Ikram');
+    // spec 34: questionable events carry a Review action and a status
+    expect(html).toContain('Review');
+    expect(html).toMatch(/Pending Review|Excused|Unexcused/);
   });
 
   it('renders the employee summaries', () => {

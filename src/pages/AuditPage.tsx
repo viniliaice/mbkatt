@@ -1,4 +1,4 @@
-import { AlertTriangle, Download, FileSpreadsheet, Filter, Info, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, ClipboardCheck, Download, FileSpreadsheet, Filter, Info, Sparkles, X } from 'lucide-react';
 import * as React from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '@/components/AppShell';
@@ -12,11 +12,13 @@ import {
 } from '@/components/AuditFilters';
 import { DataTable, tableToCsv, type Column } from '@/components/DataTable';
 import { EmployeeDrawer } from '@/components/EmployeeDrawer';
+import { AdminReviewDialog } from '@/components/AdminReviewDialog';
 import { EvidenceModal } from '@/components/EvidencePanel';
-import { BiometricBadge, MatchStatusBadge, NotificationBadge } from '@/components/StatusBadges';
+import { BiometricBadge, ExcuseStatusBadge, MatchStatusBadge, NotificationBadge } from '@/components/StatusBadges';
 import { Alert, Badge, Button, Card, CardContent } from '@/components/ui';
 import { formatDisplayDate } from '@/lib/dates';
 import { download } from '@/lib/reports';
+import { needsAdministrativeReview } from '@/lib/admin';
 import { useStore } from '@/lib/store';
 import { minutesToClock } from '@/lib/time';
 import type { AuditRecord } from '@/lib/types';
@@ -36,13 +38,14 @@ const QUICK_LABELS: Record<string, string> = {
 };
 
 export function AuditPage() {
-  const { result, searchQuery } = useStore();
+  const { result, searchQuery, corrections } = useStore();
   const [params, setParams] = useSearchParams();
   const [filters, setFilters] = React.useState<AuditFilterState>(() => ({
     ...EMPTY_FILTERS,
     quick: params.getAll('quick') as AuditFilterState['quick'],
   }));
   const [evidence, setEvidence] = React.useState<AuditRecord | null>(null);
+  const [reviewRecord, setReviewRecord] = React.useState<AuditRecord | null>(null);
   const [employeeId, setEmployeeId] = React.useState<string | null>(params.get('employee'));
   const [showFilters, setShowFilters] = React.useState(true);
 
@@ -73,6 +76,40 @@ export function AuditPage() {
   const rows = applyAuditFilters(result.auditRecords, filters, searchQuery);
 
   const columns: Column<AuditRecord>[] = [
+    {
+      /* Spec 34: every questionable event has a Review button that opens the
+         administrative decision dialog. Clean, agreed rows show no action. */
+      key: 'administrative',
+      header: 'Administrative',
+      value: (row) => (needsAdministrativeReview(row) ? 'Needs review' : 'No action'),
+      render: (row) => {
+        const review = corrections.adminReviews[row.id];
+        const questionable = needsAdministrativeReview(row);
+        if (!questionable && !review) {
+          return <span className="text-xs text-[var(--muted-foreground)]">—</span>;
+        }
+        return (
+          <span className="flex items-center gap-2 whitespace-nowrap">
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2 py-1 text-xs font-medium hover:bg-[var(--accent)]"
+              onClick={(event) => {
+                event.stopPropagation();
+                setReviewRecord(row);
+              }}
+            >
+              <ClipboardCheck className="size-3.5" /> Review
+            </button>
+            {review ? (
+              <ExcuseStatusBadge status={review.excuseStatus} />
+            ) : (
+              <Badge tone="warning">Pending Review</Badge>
+            )}
+          </span>
+        );
+      },
+      hideOnMobile: true,
+    },
     {
       key: 'date',
       header: 'Date',
@@ -316,6 +353,7 @@ export function AuditPage() {
       ) : null}
 
       <EvidenceModal record={evidence} open={evidence !== null} onClose={() => setEvidence(null)} />
+      <AdminReviewDialog record={reviewRecord} open={reviewRecord !== null} onClose={() => setReviewRecord(null)} />
       <EmployeeDrawer
         employeeId={employeeId}
         open={employeeId !== null}
