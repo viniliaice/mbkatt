@@ -7,6 +7,7 @@
  */
 
 import type { DetectionResult, FileKind } from './types';
+import { isOleBinaryXls, isZipOoxml } from './parsers/excelWorkbook';
 
 const WHATSAPP_LINE =
   /^\s*[\u200e\u200f]?(?:\[[^,\]]+,\s*[^\]\u200e\u200f]+\]|\d{1,4}[-/.]\d{1,2}[-/.]\d{2,4},\s*\d{1,2}[:.]\d{2})/;
@@ -82,15 +83,47 @@ function firstRowDelimiterScore(text: string): { delimiter: string | null; colum
   return { delimiter: best.delimiter, columns: best.columns };
 }
 
-export function detectFileType(fileName: string, text: string): DetectionResult {
+export function detectFileType(
+  fileName: string,
+  text: string,
+  buffer?: ArrayBuffer | Uint8Array,
+): DetectionResult {
   const reasons: string[] = [];
   const warnings: string[] = [];
   const lowerName = String(fileName ?? '').toLowerCase();
   const extension = lowerName.includes('.') ? lowerName.slice(lowerName.lastIndexOf('.')) : '';
+
+  // Inspect actual binary buffer content before anything else (spec section 1 & 27)
+  if (buffer) {
+    if (isOleBinaryXls(buffer)) {
+      return {
+        kind: 'attendance',
+        confidence: 0.99,
+        reasons: [
+          'Legacy Microsoft Excel Workbook (BIFF8/OLE binary format) — identified from OLE file header.',
+          'Attendance / HR Report workbook format.',
+        ],
+        warnings: [],
+      };
+    }
+    if (isZipOoxml(buffer)) {
+      return {
+        kind: 'attendance',
+        confidence: 0.99,
+        reasons: [
+          'Modern Microsoft Excel Workbook (.xlsx XML ZIP format) — identified from ZIP file header.',
+          'Attendance / HR Report workbook format.',
+        ],
+        warnings: [],
+      };
+    }
+  }
+
   const lines = countLines(text, 1500);
   const nonEmpty = lines.filter((line) => line.trim() !== '');
 
-  const isXlsx = extension === '.xlsx' || extension === '.xls' || extension === '.xlsm';
+  const isXls = extension === '.xls';
+  const isXlsx = extension === '.xlsx' || extension === '.xlsm';
 
   const whatsappHeaderRatio = countMatches(lines, (line) => WHATSAPP_LINE.test(line));
   const whatsappAuthorRatio = countMatches(lines, (line) => WHATSAPP_AUTHOR.test(line));
@@ -131,9 +164,12 @@ export function detectFileType(fileName: string, text: string): DetectionResult 
     reasons.push(`${Math.round(isoChatRatio * 100)}% of lines start with an ISO chat timestamp ([YYYY-MM-DD HH:MM]).`);
   }
 
-  if (isXlsx) {
-    attendanceScore += 3;
-    reasons.push('Excel workbook (.xlsx/.xls) — treated as attendance data.');
+  if (isXls) {
+    attendanceScore += 4;
+    reasons.push('Legacy Microsoft Excel Workbook (.xls) — Attendance / HR Report.');
+  } else if (isXlsx) {
+    attendanceScore += 4;
+    reasons.push('Excel workbook (.xlsx) — Attendance / HR Report.');
   }
 
   if (delimiter && columns >= 3) {

@@ -42,9 +42,10 @@ export function EvidenceList({ items }: { items: EvidenceItem[] }) {
               <span className="text-sm font-medium">{item.label}</span>
             </div>
             <p className="mt-2 text-sm text-[var(--muted-foreground)]">{item.detail}</p>
-            {item.sourceFile || item.sourceLocation ? (
+            {item.sourceFile || item.sourceSheet || item.sourceLocation ? (
               <p className="mt-1 text-xs text-[var(--muted-foreground)]">
                 Source: {item.sourceFile ?? '—'}
+                {item.sourceSheet ? ` · Sheet: ${item.sourceSheet}` : ''}
                 {item.sourceLocation ? ` (${item.sourceLocation})` : ''}
               </p>
             ) : null}

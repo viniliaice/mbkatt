@@ -99,6 +99,21 @@ export function buildEmployeeSummaries(
         record.matchStatus === 'WHATSAPP_UNMATCHED_NAME',
     ).length;
 
+    const totalLateMinutes = sorted.reduce(
+      (sum, record) => sum + (record.biometric.lateByMinutes ?? 0),
+      0,
+    );
+    const excusedAbsenceDays = sorted.filter(
+      (record) => record.biometric.status === 'EXCUSED',
+    ).length;
+    const unexcusedAbsenceDays = absentDays;
+    const notifiedLateDays = sorted.filter(
+      (record) => record.biometric.isLate === true && record.whatsapp.hasNotification,
+    ).length;
+    const notifiedAbsenceDays = sorted.filter(
+      (record) => record.biometric.status === 'ABSENT' && record.whatsapp.hasNotification,
+    ).length;
+
     const attendanceRate =
       workingRecords.length > 0
         ? Math.round((presentDays / workingRecords.length) * 1000) / 10
@@ -109,13 +124,21 @@ export function buildEmployeeSummaries(
       name: first?.employeeName ?? employeeId,
       employeeCode: first?.employeeCode ?? null,
       department: first?.department ?? null,
+      expectedWorkingDays: workingRecords.length,
       presentDays,
       lateDays,
+      totalLateMinutes,
       absentDays,
+      fullAbsenceDays: absentDays,
+      excusedAbsenceDays,
+      unexcusedAbsenceDays,
       sickDays,
       leftEarlyDays,
+      earlyDepartureDays: leftEarlyDays,
       onTimeDays,
+      notifiedLateDays,
       unnotifiedLateDays,
+      notifiedAbsenceDays,
       unnotifiedAbsenceDays,
       whatsappNotificationCount: notificationIds.size,
       matchedDays,
@@ -282,8 +305,38 @@ export function buildAnalysisSummary(params: {
     whatsappNotifications: notificationIds.size,
     unnotifiedLateArrivals: unnotifiedLate.length,
     unnotifiedAbsences: unnotifiedAbsence.length,
+    lateNotified: late.length - unnotifiedLate.length,
+    absentNotified: absent.length - unnotifiedAbsence.length,
+    presentDays: employeeRecords.filter(
+      (r) =>
+        r.biometric.status === 'PRESENT' ||
+        r.biometric.status === 'LATE' ||
+        r.biometric.status === 'PRESENT_LEFT_EARLY',
+    ).length,
+    absentDays: absent.length,
+    conflicts: conflicts.length,
     conflictingRecords: conflicts.length,
     unmatchedNames,
+
+    reconciliation: {
+      employees: employeesInAttendance,
+      workingDays: workingDates.length,
+      employeeDayCombinations: employeesInAttendance * workingDates.length,
+      present: employeeRecords.filter(
+        (r) =>
+          r.biometric.status === 'PRESENT' ||
+          r.biometric.status === 'LATE' ||
+          r.biometric.status === 'PRESENT_LEFT_EARLY',
+      ).length,
+      late: late.length,
+      absent: absent.length,
+      lateNotified: late.length - unnotifiedLate.length,
+      lateUnnotified: unnotifiedLate.length,
+      absentNotified: absent.length - unnotifiedAbsence.length,
+      absentUnnotified: unnotifiedAbsence.length,
+      conflicts: conflicts.length,
+      potentialReview: reviewItems,
+    },
 
     totalMessages: messagesTotal,
     staffMessages,

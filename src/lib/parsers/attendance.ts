@@ -173,7 +173,8 @@ function csvRows(text: string): { rows: string[][]; delimiter: string } {
 
 const NAME_COLUMN_PATTERN =
   /^(employee\s*name|emp\s*name|name|full\s*name|staff\s*name|worker|person|employee|staff|magaca|shaqaalaha|sh\u0430qaale)$/i;
-const ID_COLUMN_PATTERN = /^(id|no|s\.?\s*no|serial|emp\s*(id|no|code|number)|employee\s*(id|code|no|number)|code|badge|staff\s*id|pin|user\s*id|aqoonsi)$/i;
+const ID_COLUMN_PATTERN =
+  /^(ac-?no\.?|id|no\.?|s\.?\s*no\.?|serial|emp\s*(id|no|code|number)?|employee\s*(id|code|no|number)?|code|badge(\s*no)?|card(\s*no)?|staff\s*(id|no|code)?|pin|user\s*(id|no|code)?|enroll\s*(id|no|code|number)?|aqoonsi)$/i;
 const DEPT_COLUMN_PATTERN = /^(department|dept|debt|section|division|position|job|role|title|designation|waax|job\s*title)$/i;
 const DATE_COLUMN_PATTERN = /^(date|day|tarikh|taariikh|date\s*of\s*attendance)$/i;
 const TIME_COLUMN_PATTERN =
@@ -432,6 +433,8 @@ export function parseAttendanceFile(
   }
 
   const employees = new Map<string, AttendanceEmployee>();
+  const employeesByName = new Map<string, AttendanceEmployee>();
+  const employeesByCode = new Map<string, AttendanceEmployee>();
   const records = new Map<string, AttendanceRecord>();
   const punches: Punch[] = [];
   const markersFound = new Set<string>();
@@ -448,11 +451,21 @@ export function parseAttendanceFile(
     const name = String(rawName ?? '').trim();
     const code = rawCode ? String(rawCode).trim() : null;
     if (!name && !code) return null;
-    const identity = code ? `code:${code.toLowerCase()}` : `name:${normalizeName(name)}`;
-    const existing = employees.get(identity);
+    const normName = name ? normalizeName(name) : '';
+    let existing: AttendanceEmployee | undefined;
+    if (code) {
+      existing = employeesByCode.get(code.toLowerCase());
+    }
+    if (!existing && normName) {
+      existing = employeesByName.get(normName);
+    }
     if (existing) {
       if (!existing.department && department) existing.department = department;
       if (!existing.sourceFileIds.includes(options.fileId)) existing.sourceFileIds.push(options.fileId);
+      if (code && !existing.employeeCode) {
+        existing.employeeCode = code;
+        employeesByCode.set(code.toLowerCase(), existing);
+      }
       existing.rowNumbers[options.fileId] = rowNumber;
       Object.assign(existing.rawRow, rawRow);
       return existing;
@@ -461,13 +474,15 @@ export function parseAttendanceFile(
       id: `${options.fileId}-e${employees.size + 1}`,
       employeeCode: code,
       name: name || code || 'Unknown',
-      nameNormalized: normalizeName(name || code || ''),
+      nameNormalized: normName,
       department,
       sourceFileIds: [options.fileId],
       rawRow,
       rowNumbers: { [options.fileId]: rowNumber },
     };
-    employees.set(identity, employee);
+    employees.set(employee.id, employee);
+    if (normName) employeesByName.set(normName, employee);
+    if (code) employeesByCode.set(code.toLowerCase(), employee);
     return employee;
   };
 

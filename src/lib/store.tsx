@@ -18,9 +18,10 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import * as XLSX from 'xlsx';
 import { analyze } from '@/lib/analyze';
 import { detectFileType } from '@/lib/detect';
+import { isExcelWorkbook, parseExcelWorkbook } from '@/lib/parsers/excelWorkbook';
+import { STANDARD_REPORT_XLS_BASE64 } from '@/lib/sampleXls';
 import { DEFAULT_SETTINGS, settingsWithDefaults } from '@/lib/rules';
 import { emptyCorrections } from '@/lib/types';
 import type {
@@ -30,6 +31,7 @@ import type {
   Audience,
   AdminReviewEntry,
   Corrections,
+  ExcelWorkbookParseResult,
   FileKind,
   Settings,
   StaffEventType,
@@ -86,33 +88,10 @@ interface StoreValue {
   setAdminReview: (auditId: string, entry: AdminReviewEntry | null) => void;
   resetCorrections: () => void;
   dismissNotice: () => void;
+  getFileData: (fileId: string) => AnalysisInputFile | undefined;
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
-
-function readXlsx(buffer: ArrayBuffer): { text: string; rows: string[][] } {
-  const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
-  const firstSheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[firstSheetName];
-  const rows = XLSX.utils.sheet_to_json<string[]>(sheet, {
-    header: 1,
-    raw: false,
-    blankrows: false,
-    defval: '',
-  }) as unknown as string[][];
-  const cleaned = rows.map((row) =>
-    (row ?? []).map((cell) => (cell === null || cell === undefined ? '' : String(cell))),
-  );
-  // Text form is still produced so the preview and detection work unchanged
-  const text = cleaned.map((row) => row.join(',')).join('\n');
-  return { text, rows: cleaned };
-}
-
-function fileKindFromName(name: string): 'xlsx' | 'text' {
-  const lower = name.toLowerCase();
-  if (lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.xlsm')) return 'xlsx';
-  return 'text';
-}
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [files, setFiles] = useState<UploadedFileMeta[]>([]);
@@ -209,34 +188,54 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         try {
           let text = '';
           let rows: string[][] | undefined;
-          if (fileKindFromName(file.name) === 'xlsx') {
-            const buffer = await file.arrayBuffer();
-            const parsed = readXlsx(buffer);
-            text = parsed.text;
-            rows = parsed.rows;
+          let fileBuffer: ArrayBuffer | undefined;
+          let workbookData: ExcelWorkbookParseResult | undefined;
+
+          const buffer = await file.arrayBuffer();
+          if (isExcelWorkbook(buffer, file.name)) {
+            fileBuffer = buffer;
+            const parsedWb = parseExcelWorkbook(buffer, {
+              fileId: `file-${Date.now().toString(36)}`,
+              fileName: file.name,
+              dateOrder: settings.attendanceDateOrder,
+              fallbackYear: settings.fallbackYear,
+            });
+            workbookData = parsedWb;
+            const primarySheetName = Object.keys(parsedWb.rawGrids)[0];
+            rows = parsedWb.rawGrids[primarySheetName] ?? [];
+            text = rows.map((r) => r.join(',')).join('\n');
           } else {
-            text = await file.text();
+            text = new TextDecoder('utf-8').decode(buffer);
           }
-          if (!text.trim()) {
+
+          if (!text.trim() && (!rows || rows.length === 0)) {
             problems.push(`"${file.name}" is empty.`);
             continue;
           }
-          const detection = detectFileType(file.name, text);
+          const detection = detectFileType(file.name, text, fileBuffer);
+          if (workbookData) {
+            detection.workbookMeta = workbookData.meta;
+          }
+
           const meta: UploadedFileMeta = {
             id: `file-${Date.now().toString(36)}-${added.length}-${Math.random()
               .toString(36)
               .slice(2, 7)}`,
             name: file.name,
             size: file.size,
-            mimeType: file.type || 'text/plain',
+            mimeType: file.type || (workbookData ? 'application/vnd.ms-excel' : 'text/plain'),
             uploadedAt: new Date().toISOString(),
             kind: detection.kind,
             kindOverride: null,
             detection,
             preview: text.slice(0, 600),
             parseStatus: 'parsed',
+            excelWorkbookMeta: workbookData?.meta,
           };
-          contents.current.set(meta.id, { meta, text, rows });
+          if (workbookData) {
+            workbookData.summary.fileId = meta.id;
+          }
+          contents.current.set(meta.id, { meta, text, rows, buffer: fileBuffer, workbookData });
           added.push(meta);
         } catch (cause) {
           problems.push(
@@ -358,10 +357,52 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       contents.current.set(meta.id, { meta, text: sample.text });
       added.push(meta);
     }
+
+    // Add 150_StandardReport.xls (Legacy Excel Attendance Workbook)
+    const binaryStr = atob(STANDARD_REPORT_XLS_BASE64);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    const xlsBuffer = bytes.buffer;
+    const parsedXls = parseExcelWorkbook(xlsBuffer, {
+      fileId: 'sample-150_StandardReport.xls',
+      fileName: '150_StandardReport.xls',
+      dateOrder: 'auto',
+      fallbackYear: 2026,
+    });
+    const xlsPrimarySheet = Object.keys(parsedXls.rawGrids)[0];
+    const xlsRows = parsedXls.rawGrids[xlsPrimarySheet] ?? [];
+    const xlsText = xlsRows.map((r) => r.join(',')).join('\n');
+    const xlsDetection = detectFileType('150_StandardReport.xls', xlsText, xlsBuffer);
+    xlsDetection.workbookMeta = parsedXls.meta;
+
+    const xlsMeta: UploadedFileMeta = {
+      id: 'sample-150_StandardReport.xls',
+      name: '150_StandardReport.xls',
+      size: bytes.byteLength,
+      mimeType: 'application/vnd.ms-excel',
+      uploadedAt: new Date().toISOString(),
+      kind: 'attendance',
+      kindOverride: null,
+      detection: xlsDetection,
+      preview: xlsText.slice(0, 600),
+      parseStatus: 'parsed',
+      excelWorkbookMeta: parsedXls.meta,
+    };
+    contents.current.set(xlsMeta.id, {
+      meta: xlsMeta,
+      text: xlsText,
+      rows: xlsRows,
+      buffer: xlsBuffer,
+      workbookData: parsedXls,
+    });
+    added.push(xlsMeta);
+
     setFiles(added);
     setSettings((current) => ({ ...current, fallbackYear: 2026 }));
     setNotice(
-      'Sample files loaded (the example chat and attendance exports used to demonstrate the audit). Replace them with your own files before relying on the result.',
+      'Sample files loaded (WhatsApp chat export, attendance CSVs, and legacy 150_StandardReport.xls workbook). Press “Analyze attendance” to view cross-referenced results.',
     );
   }, []);
 
@@ -495,6 +536,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setNotice('All manual corrections were reset. The audit will use the automatic results again.');
   }, []);
 
+  const getFileData = useCallback((fileId: string) => contents.current.get(fileId), []);
+
   const value = useMemo<StoreValue>(
     () => ({
       files,
@@ -529,6 +572,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setAdminReview,
       resetCorrections,
       dismissNotice: () => setNotice(null),
+      getFileData,
     }),
     [
       addAlias,
@@ -561,6 +605,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       settings,
       updateSettings,
       patchCorrections,
+      getFileData,
     ],
   );
 

@@ -22,6 +22,7 @@ export interface DetectionResult {
   /** CSV dialect actually detected (attendance files) */
   delimiter?: string;
   headerRowIndex?: number;
+  workbookMeta?: ExcelWorkbookMeta;
 }
 
 export interface UploadedFileMeta {
@@ -38,6 +39,7 @@ export interface UploadedFileMeta {
   preview: string;
   parseStatus: 'pending' | 'parsed' | 'error';
   parseError?: string;
+  excelWorkbookMeta?: ExcelWorkbookMeta;
 }
 
 /* ------------------------------------------------------------------ *
@@ -160,6 +162,7 @@ export interface Punch {
   fileName: string;
   rowNumber: number;
   columnLabel: string;
+  sheetName?: string;
 }
 
 export interface AttendanceCell {
@@ -181,6 +184,7 @@ export interface AttendanceEmployee {
   /** the untouched source row, keyed by original header */
   rawRow: Record<string, string>;
   rowNumbers: Record<string, number>;
+  sourceSheets?: string[];
 }
 
 export interface AttendanceRecord {
@@ -195,6 +199,12 @@ export interface AttendanceRecord {
   markers: string[];
   parseWarnings: string[];
   sourceFileIds: string[];
+  sourceSheets?: string[];
+  specialShift?: { code: string | number | null; description: string } | null;
+  workDurationMinutes?: number | null;
+  lateDurationMinutes?: number | null;
+  leaveEarlyDurationMinutes?: number | null;
+  overtimeDurationMinutes?: number | null;
 }
 
 /**
@@ -295,6 +305,7 @@ export interface EvidenceItem {
   label: string;
   detail: string;
   sourceFile?: string;
+  sourceSheet?: string;
   sourceLocation?: string;
   raw?: string;
 }
@@ -384,6 +395,40 @@ export interface WhatsAppEvidenceSlice {
   reasons: string[];
 }
 
+export type FinalStatusMatrixType =
+  | 'PRESENT - ON TIME - NOTIFIED'
+  | 'PRESENT - ON TIME - NO NOTIFICATION'
+  | 'LATE - NOTIFIED'
+  | 'LATE - UNNOTIFIED'
+  | 'ABSENT - NOTIFIED'
+  | 'ABSENT - UNNOTIFIED'
+  | 'SICK - NOTIFIED'
+  | 'SICK - UNNOTIFIED'
+  | 'LEFT EARLY - NOTIFIED'
+  | 'LEFT EARLY - UNNOTIFIED'
+  | 'EXCEPTION'
+  | 'HOLIDAY'
+  | 'NON-WORKING DAY'
+  | 'CONFLICT'
+  | 'NEEDS REVIEW';
+
+export interface AttendanceCalculationDebug {
+  employee: string;
+  employeeId: string;
+  date: string;
+  day: string;
+  firstPunch: string | null;
+  lastPunch: string | null;
+  punchCount: number;
+  cutoff: string;
+  comparison: string;
+  calculatedStatus: string;
+  lateMinutes: number;
+  whatsappMatch: string;
+  finalStatus: FinalStatusMatrixType;
+  reasons: string[];
+}
+
 export interface AuditRecord {
   id: string;
   date: string;
@@ -399,6 +444,8 @@ export interface AuditRecord {
   notificationStatus: NotificationStatus;
   matchStatus: MatchStatus;
   matchLabel: string;
+  finalStatus: FinalStatusMatrixType;
+  calculationDebug?: AttendanceCalculationDebug;
   confidence: 'high' | 'medium' | 'low';
   confidenceScore: number;
   notes: string[];
@@ -493,6 +540,10 @@ export interface AdminTeacherStats {
   presentDays: number;
   excusedExcludedDays: number;
   attendanceRate: number | null;
+  notifiedLate: number;
+  unnotifiedLate: number;
+  notifiedAbsence: number;
+  unnotifiedAbsence: number;
   rateDetail: {
     expectedWorkingDays: number;
     present: number;
@@ -571,6 +622,11 @@ export interface ValidationReport {
     /** structural evidence from the WhatsApp parser (spec 45) */
     diagnostics?: WhatsAppParseDiagnostics;
     critical?: boolean;
+    excelWorkbookMeta?: ExcelWorkbookMeta;
+    excelWorkbookResult?: ExcelWorkbookParseResult;
+    attendanceLogs?: number;
+    exceptions?: number;
+    statisticalRecords?: number;
   }[];
   totals: {
     files: number;
@@ -589,6 +645,20 @@ export interface ValidationReport {
     /** parsing problems that block an honest analysis (spec 51) */
     criticalProblems: number;
     warningProblems: number;
+    reconciliation?: {
+      employees: number;
+      workingDays: number;
+      employeeDayCombinations: number;
+      present: number;
+      late: number;
+      absent: number;
+      lateNotified: number;
+      lateUnnotified: number;
+      absentNotified: number;
+      absentUnnotified: number;
+      conflicts: number;
+      potentialReview: number;
+    };
   };
   dateRange: { first: string | null; last: string | null };
   problems: ReviewIssue[];
@@ -756,9 +826,28 @@ export interface AnalysisSummary {
   whatsappNotifications: number;
   unnotifiedLateArrivals: number;
   unnotifiedAbsences: number;
+  lateNotified?: number;
+  absentNotified?: number;
+  presentDays?: number;
+  absentDays?: number;
+  conflicts?: number;
   conflictingRecords: number;
   unmatchedNames: number;
   reviewItems: number;
+  reconciliation?: {
+    employees: number;
+    workingDays: number;
+    employeeDayCombinations: number;
+    present: number;
+    late: number;
+    absent: number;
+    lateNotified: number;
+    lateUnnotified: number;
+    absentNotified: number;
+    absentUnnotified: number;
+    conflicts: number;
+    potentialReview: number;
+  };
 
   totalMessages: number;
   staffMessages: number;
@@ -797,13 +886,21 @@ export interface EmployeeSummary {
   name: string;
   employeeCode: string | null;
   department: string | null;
+  expectedWorkingDays: number;
   presentDays: number;
   lateDays: number;
+  totalLateMinutes: number;
   absentDays: number;
+  fullAbsenceDays: number;
+  excusedAbsenceDays: number;
+  unexcusedAbsenceDays: number;
   sickDays: number;
   leftEarlyDays: number;
+  earlyDepartureDays: number;
   onTimeDays: number;
+  notifiedLateDays: number;
   unnotifiedLateDays: number;
+  notifiedAbsenceDays: number;
   unnotifiedAbsenceDays: number;
   whatsappNotificationCount: number;
   matchedDays: number;
@@ -864,4 +961,145 @@ export interface AnalysisInputFile {
   text: string;
   /** binary rows for xlsx (already converted to text tables) */
   rows?: string[][];
+  buffer?: ArrayBuffer | Uint8Array;
+  workbookData?: ExcelWorkbookParseResult;
 }
+
+/* ------------------------------------------------------------------ *
+ * Multi-Sheet Excel Attendance Workbook (Legacy .xls & Modern .xlsx)
+ * ------------------------------------------------------------------ */
+
+export type ExcelSheetClassification =
+  | 'SCHEDULE'
+  | 'ATTENDANCE_STATISTICS'
+  | 'ATTENDANCE_LOG'
+  | 'EXCEPTION_REPORT'
+  | 'ATTENDANCE_SUMMARY'
+  | 'UNKNOWN';
+
+export interface ExcelSheetMeta {
+  sheetName: string;
+  detectedType: ExcelSheetClassification;
+  typeLabel: string;
+  confidence: number;
+  rowCount: number;
+  columnCount: number;
+  recordCount: number;
+  status: 'Parsed' | 'Needs review' | 'Error';
+  statusReason?: string;
+  diagnosticsCount?: number;
+}
+
+export interface ExcelWorkbookMeta {
+  isLegacyXls: boolean;
+  formatDescription: string;
+  sheetCount: number;
+  sheets: ExcelSheetMeta[];
+  employeeCount: number;
+  recordCount: number;
+  punchCount: number;
+  exceptionCount: number;
+  statisticalRecordCount: number;
+  dateRange: { first: string | null; last: string | null };
+  errorCount: number;
+  warningCount: number;
+}
+
+export interface CellDiagnostic {
+  file: string;
+  sheet: string;
+  cell: string;
+  row: number;
+  column: string;
+  rawValue: string;
+  detectedType: string;
+  parsedValue: string;
+  status: 'SUCCESS' | 'WARNING' | 'UNRECOGNIZED' | 'REVIEW';
+  problem?: string;
+  action?: string;
+}
+
+export interface DurationValue {
+  hours: number;
+  minutes: number;
+  totalMinutes: number;
+  totalHours: number;
+  display: string;
+  raw: string;
+}
+
+export interface CompoundDaysValue {
+  normalDays: number;
+  realDays: number;
+  raw: string;
+}
+
+export interface SpecialShiftCode {
+  code: string | number | null;
+  description: string;
+  raw: string;
+}
+
+export interface CanonicalEmployee {
+  id: string;
+  name: string;
+  department: string | null;
+  sourceWorkbook?: string;
+  sourceSheet?: string;
+}
+
+export interface AttendanceDay {
+  employeeId: string;
+  date: string;
+  firstPunch: number | null;
+  lastPunch: number | null;
+  allPunches: string[];
+  workDuration: { hours: number; minutes: number; totalMinutes: number } | null;
+  lateDuration: number | null;
+  leaveEarlyDuration: number | null;
+  overtimeDuration: number | null;
+  attendanceStatus: string;
+  exceptionStatus?: string | null;
+  specialShift?: { code: string | number | null; description: string } | null;
+  sourceFile: string;
+  sourceSheet: string;
+  sourceRow: number;
+}
+
+export interface WhatsAppEvent {
+  date: string;
+  time: string | null;
+  sender: string | null;
+  mentionedPerson: string | null;
+  eventType: string;
+  message: string;
+  sourceFile: string;
+}
+
+export interface ExcelWorkbookParseResult {
+  meta: ExcelWorkbookMeta;
+  summary: AttendanceFileSummary;
+  employees: AttendanceEmployee[];
+  canonicalEmployees: CanonicalEmployee[];
+  records: AttendanceRecord[];
+  canonicalDays: AttendanceDay[];
+  punches: Punch[];
+  diagnostics: CellDiagnostic[];
+  warnings: string[];
+  problems: {
+    type: 'malformed_time' | 'duplicate_record' | 'missing_dates' | 'employee_without_punches';
+    message: string;
+    sheetName?: string;
+    rowNumber?: number;
+    column?: string;
+    raw?: string;
+  }[];
+  sheetTables: Record<string, {
+    headers: string[];
+    rows: (string | number)[][];
+    detectedType: ExcelSheetClassification;
+    typeLabel: string;
+  }>;
+  rawGrids: Record<string, string[][]>;
+}
+

@@ -412,6 +412,10 @@ export function buildAdminTeacherStats(input: BuildAdminStatsInput): AdminTeache
     let leftEarlyDays = 0;
     let lateOccurrences = 0;
     let totalLateMinutes = 0;
+    let notifiedLate = 0;
+    let unnotifiedLate = 0;
+    let notifiedAbsence = 0;
+    let unnotifiedAbsence = 0;
     let whatsappNotifications = 0;
 
     const expectedDates = new Set(workingDates);
@@ -424,6 +428,8 @@ export function buildAdminTeacherStats(input: BuildAdminStatsInput): AdminTeache
       if (record.biometric.isLate) {
         lateOccurrences += 1;
         totalLateMinutes += lateMinutesFor(record, settings);
+        if (record.whatsapp.hasNotification) notifiedLate += 1;
+        else unnotifiedLate += 1;
       }
       if (record.biometric.leftEarly) leftEarlyDays += 1;
       if (record.biometric.status === 'SICK_LEAVE' || record.whatsapp.events.includes('SICK')) {
@@ -431,6 +437,9 @@ export function buildAdminTeacherStats(input: BuildAdminStatsInput): AdminTeache
       }
       const isFullAbsence = record.biometric.isAbsent === true || record.biometric.status === 'ABSENT';
       if (isFullAbsence) {
+        if (record.whatsapp.hasNotification) notifiedAbsence += 1;
+        else unnotifiedAbsence += 1;
+
         if (status === 'excused') {
           fullAbsencesExcused += 1;
           excusedDays += 1;
@@ -495,6 +504,10 @@ export function buildAdminTeacherStats(input: BuildAdminStatsInput): AdminTeache
       leftEarlyDays,
       lateOccurrences,
       totalLateMinutes,
+      notifiedLate,
+      unnotifiedLate,
+      notifiedAbsence,
+      unnotifiedAbsence,
       expectedWorkingDays: rateInput.expectedWorkingDays,
       presentDays,
       excusedExcludedDays: detail.excludedExcused + detail.excludedLeave,

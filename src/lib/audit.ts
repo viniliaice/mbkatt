@@ -26,11 +26,13 @@ import {
   matchStatusMeta,
 } from './statuses';
 import type {
+  AttendanceCalculationDebug,
   AttendanceEmployee,
   AttendanceRecord,
   AuditRecord,
   BiometricEvaluation,
   EvidenceItem,
+  FinalStatusMatrixType,
   MatchStatus,
   NameMatch,
   NotificationStatus,
@@ -305,6 +307,30 @@ export function buildAudit(context: AuditContext): AuditOutput {
       const notes = [...biometric.caveats, ...derived.reasons];
       if (slice.hasNotification) notes.push(...slice.reasons);
 
+      const calculationDebug: AttendanceCalculationDebug = {
+        employee: employee.name,
+        employeeId: employee.id,
+        date,
+        day: weekdayName(date),
+        firstPunch: biometric.firstPunch !== null ? minutesToClock(biometric.firstPunch) : null,
+        lastPunch: biometric.lastPunch !== null ? minutesToClock(biometric.lastPunch) : null,
+        punchCount: biometric.punchCount,
+        cutoff: biometric.lateCutoffMinutes !== null ? minutesToClock(biometric.lateCutoffMinutes) : 'N/A',
+        comparison:
+          biometric.firstPunch !== null && biometric.lateCutoffMinutes !== null
+            ? `${minutesToClock(biometric.firstPunch)} ${biometric.isLate ? '>' : '<='} ${minutesToClock(biometric.lateCutoffMinutes)}`
+            : biometric.punchCount === 0 && biometric.isWorkingDay
+              ? 'No biometric punch recorded'
+              : biometric.workingDayReason,
+        calculatedStatus: biometric.status,
+        lateMinutes: biometric.lateByMinutes ?? 0,
+        whatsappMatch: slice.hasNotification
+          ? `${slice.events.join(', ') || 'Notification'} by ${slice.senders.join(', ') || 'Unknown'}`
+          : 'NONE',
+        finalStatus: derived.finalStatus,
+        reasons: derived.reasons,
+      };
+
       const auditRecord: AuditRecord = {
         id: `audit-${employee.id}-${date}`,
         date,
@@ -319,6 +345,8 @@ export function buildAudit(context: AuditContext): AuditOutput {
         notificationStatus: derived.notificationStatus,
         matchStatus: derived.status,
         matchLabel: matchStatusMeta(derived.status).label,
+        finalStatus: derived.finalStatus,
+        calculationDebug,
         confidence: derived.confidence,
         confidenceScore: derived.confidenceScore,
         notes,
@@ -364,6 +392,25 @@ export function buildAudit(context: AuditContext): AuditOutput {
       notificationStatus: 'notified',
       matchStatus: 'WHATSAPP_UNMATCHED_NAME',
       matchLabel: matchStatusMeta('WHATSAPP_UNMATCHED_NAME').label,
+      finalStatus: 'NEEDS REVIEW',
+      calculationDebug: {
+        employee: displayNameFromKey(rawName, messages),
+        employeeId: `${UNMATCHED_PREFIX}${rawName}`,
+        date,
+        day: weekdayName(date),
+        firstPunch: null,
+        lastPunch: null,
+        punchCount: 0,
+        cutoff: 'N/A',
+        comparison: 'No biometric record found in attendance files',
+        calculatedStatus: 'NO_RECORD',
+        lateMinutes: 0,
+        whatsappMatch: slice.events.join(', ') || 'Mentioned in WhatsApp',
+        finalStatus: 'NEEDS REVIEW',
+        reasons: [
+          `The name "${displayNameFromKey(rawName, messages)}" in WhatsApp could not be matched to any attendance employee.`,
+        ],
+      },
       confidence: 'low',
       confidenceScore: 30,
       notes: [
@@ -634,6 +681,7 @@ export interface DeriveInput {
 
 export interface DerivedStatus {
   status: MatchStatus;
+  finalStatus: FinalStatusMatrixType;
   reasons: string[];
   notificationStatus: NotificationStatus;
   confidence: 'high' | 'medium' | 'low';
@@ -682,8 +730,39 @@ export function deriveMatchStatus(input: DeriveInput): DerivedStatus {
 
   const finish = (status: MatchStatus, extra: string[] = []): DerivedStatus => {
     const meta = matchStatusMeta(status);
+
+    let finalStatus: FinalStatusMatrixType;
+    if (!bio.isWorkingDay) {
+      finalStatus = bio.workingDayReason.toLowerCase().includes('holiday')
+        ? 'HOLIDAY'
+        : 'NON-WORKING DAY';
+    } else if (bio.status === 'EXCUSED') {
+      finalStatus = bio.workingDayReason.toLowerCase().includes('holiday') ? 'HOLIDAY' : 'EXCEPTION';
+    } else if (meta.isConflict) {
+      finalStatus = 'CONFLICT';
+    } else if (status === 'UNCERTAIN' || status === 'WHATSAPP_UNMATCHED_NAME' || status === 'BIOMETRIC_PARSE_ISSUE') {
+      finalStatus = 'NEEDS REVIEW';
+    } else if (bio.isLate) {
+      finalStatus = wa.hasNotification ? 'LATE - NOTIFIED' : 'LATE - UNNOTIFIED';
+    } else if (bio.status === 'ABSENT') {
+      if (isSick && wa.hasNotification) {
+        finalStatus = 'SICK - NOTIFIED';
+      } else {
+        finalStatus = wa.hasNotification ? 'ABSENT - NOTIFIED' : 'ABSENT - UNNOTIFIED';
+      }
+    } else if (bio.status === 'SICK_LEAVE') {
+      finalStatus = wa.hasNotification ? 'SICK - NOTIFIED' : 'SICK - UNNOTIFIED';
+    } else if (bio.leftEarly) {
+      finalStatus = wa.hasNotification ? 'LEFT EARLY - NOTIFIED' : 'LEFT EARLY - UNNOTIFIED';
+    } else if (bioPresent) {
+      finalStatus = wa.hasNotification ? 'PRESENT - ON TIME - NOTIFIED' : 'PRESENT - ON TIME - NO NOTIFICATION';
+    } else {
+      finalStatus = 'NEEDS REVIEW';
+    }
+
     return {
       status,
+      finalStatus,
       reasons: [
         meta.label,
         ...extra,

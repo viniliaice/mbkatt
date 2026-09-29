@@ -1,4 +1,4 @@
-import { AlertTriangle, ClipboardCheck, Download, FileSpreadsheet, Filter, Info, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, Calculator, ClipboardCheck, Download, FileSpreadsheet, Filter, Info, Sparkles, X } from 'lucide-react';
 import * as React from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '@/components/AppShell';
@@ -14,8 +14,9 @@ import { DataTable, tableToCsv, type Column } from '@/components/DataTable';
 import { EmployeeDrawer } from '@/components/EmployeeDrawer';
 import { AdminReviewDialog } from '@/components/AdminReviewDialog';
 import { EvidenceModal } from '@/components/EvidencePanel';
+import { AttendanceCalculationModal } from '@/components/AttendanceCalculationModal';
 import { BiometricBadge, ExcuseStatusBadge, MatchStatusBadge, NotificationBadge } from '@/components/StatusBadges';
-import { Alert, Badge, Button, Card, CardContent } from '@/components/ui';
+import { Alert, Badge, Button, Card, CardContent, KeyValue } from '@/components/ui';
 import { formatDisplayDate } from '@/lib/dates';
 import { download } from '@/lib/reports';
 import { needsAdministrativeReview } from '@/lib/admin';
@@ -46,6 +47,7 @@ export function AuditPage() {
   }));
   const [evidence, setEvidence] = React.useState<AuditRecord | null>(null);
   const [reviewRecord, setReviewRecord] = React.useState<AuditRecord | null>(null);
+  const [calculationRecord, setCalculationRecord] = React.useState<AuditRecord | null>(null);
   const [employeeId, setEmployeeId] = React.useState<string | null>(params.get('employee'));
   const [showFilters, setShowFilters] = React.useState(true);
 
@@ -166,21 +168,59 @@ export function AuditPage() {
       hideOnMobile: true,
     },
     {
+      key: 'punchCount',
+      header: 'Punch count',
+      value: (row) => row.biometric.punchCount,
+      render: (row) => <span className="tabular-nums font-mono text-xs">{row.biometric.punchCount}</span>,
+      hideOnMobile: true,
+    },
+    {
       key: 'attendance',
-      header: 'Attendance status',
+      header: 'Biometric status',
       value: (row) => row.biometric.statusLabel,
       render: (row) => <BiometricBadge evaluation={row.biometric} />,
     },
     {
-      key: 'whatsappStatus',
-      header: 'WhatsApp status',
-      value: (row) => row.whatsapp.statusLabel,
+      key: 'isLate',
+      header: 'Late?',
+      value: (row) => (row.biometric.isLate ? 'Yes' : 'No'),
+      render: (row) =>
+        row.biometric.isLate ? (
+          <Badge tone="danger">Yes</Badge>
+        ) : (
+          <span className="text-xs text-[var(--muted-foreground)]">No</span>
+        ),
+    },
+    {
+      key: 'lateMinutes',
+      header: 'Late minutes',
+      value: (row) => row.biometric.lateByMinutes ?? 0,
+      render: (row) =>
+        row.biometric.lateByMinutes ? (
+          <span className="tabular-nums font-semibold text-rose-600 dark:text-rose-400">
+            {row.biometric.lateByMinutes} min
+          </span>
+        ) : (
+          <span className="text-[var(--muted-foreground)]">—</span>
+        ),
+    },
+    {
+      key: 'waNotification',
+      header: 'WhatsApp notification?',
+      value: (row) => (row.whatsapp.hasNotification ? 'Yes' : 'No'),
       render: (row) =>
         row.whatsapp.hasNotification ? (
-          <span>{row.whatsapp.statusLabel}</span>
+          <Badge tone="info">Yes</Badge>
         ) : (
-          <span className="text-[var(--muted-foreground)]">no message</span>
+          <span className="text-xs text-[var(--muted-foreground)]">No</span>
         ),
+    },
+    {
+      key: 'waEvent',
+      header: 'WhatsApp event',
+      value: (row) => row.whatsapp.events.join(', ') || '—',
+      render: (row) => <span className="text-xs">{row.whatsapp.events.join(', ') || '—'}</span>,
+      hideOnMobile: true,
     },
     {
       key: 'sender',
@@ -220,6 +260,42 @@ export function AuditPage() {
       header: 'Match status',
       value: (row) => row.matchLabel,
       render: (row) => <MatchStatusBadge status={row.matchStatus} />,
+    },
+    {
+      key: 'finalStatus',
+      header: 'Final status',
+      value: (row) => row.finalStatus ?? row.matchLabel,
+      render: (row) => (
+        <Badge
+          tone={
+            row.finalStatus?.includes('UNNOTIFIED')
+              ? 'danger'
+              : row.finalStatus?.includes('NOTIFIED')
+                ? 'warning'
+                : 'success'
+          }
+        >
+          {row.finalStatus ?? row.matchLabel}
+        </Badge>
+      ),
+    },
+    {
+      key: 'calcDebug',
+      header: 'Calculation',
+      value: () => 'Calculation',
+      render: (row) => (
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-xs font-medium hover:bg-[var(--accent)]"
+          onClick={(event) => {
+            event.stopPropagation();
+            setCalculationRecord(row);
+          }}
+          title="Show attendance calculation"
+        >
+          <Calculator className="size-3" /> Calculation
+        </button>
+      ),
     },
     {
       key: 'confidence',
@@ -278,6 +354,31 @@ export function AuditPage() {
           </>
         }
       />
+
+      {/* Section 20: Mathematical Attendance Reconciliation */}
+      {result.validation.totals.reconciliation && (
+        <Card className="mb-4 bg-[var(--card)] border border-[var(--border)]">
+          <CardContent className="pt-4 pb-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)] mb-3">
+              Mathematical Attendance Reconciliation
+            </h3>
+            <div className="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
+              <KeyValue label="Employees" value={result.validation.totals.reconciliation.employees} />
+              <KeyValue label="Working Days" value={result.validation.totals.reconciliation.workingDays} />
+              <KeyValue label="Employee-Days" value={result.validation.totals.reconciliation.employeeDayCombinations} />
+              <KeyValue label="Present" value={result.validation.totals.reconciliation.present} />
+              <KeyValue label="Late" value={result.validation.totals.reconciliation.late} />
+              <KeyValue label="Absent" value={result.validation.totals.reconciliation.absent} />
+              <KeyValue label="Late + Notified" value={result.validation.totals.reconciliation.lateNotified} />
+              <KeyValue label="Late + NO WhatsApp" value={result.validation.totals.reconciliation.lateUnnotified} />
+              <KeyValue label="Absent + Notified" value={result.validation.totals.reconciliation.absentNotified} />
+              <KeyValue label="Absent + NO WhatsApp" value={result.validation.totals.reconciliation.absentUnnotified} />
+              <KeyValue label="Conflicts" value={result.validation.totals.reconciliation.conflicts} />
+              <KeyValue label="Potential Review" value={result.validation.totals.reconciliation.potentialReview} />
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {showFilters ? (
         <AuditFilterBar filters={filters} onChange={setFilters} result={result} showStatuses />
@@ -353,6 +454,11 @@ export function AuditPage() {
       ) : null}
 
       <EvidenceModal record={evidence} open={evidence !== null} onClose={() => setEvidence(null)} />
+      <AttendanceCalculationModal
+        record={calculationRecord}
+        open={calculationRecord !== null}
+        onClose={() => setCalculationRecord(null)}
+      />
       <AdminReviewDialog record={reviewRecord} open={reviewRecord !== null} onClose={() => setReviewRecord(null)} />
       <EmployeeDrawer
         employeeId={employeeId}

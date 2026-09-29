@@ -50,7 +50,8 @@ import {
 import { FILE_KIND_LABELS } from '@/lib/detect';
 import { formatDisplayDate } from '@/lib/dates';
 import { useStore } from '@/lib/store';
-import type { FileKind, ReviewIssue, ValidationReport } from '@/lib/types';
+import { ExcelWorkbookModal } from '@/components/ExcelWorkbookModal';
+import type { ExcelWorkbookMeta, ExcelWorkbookParseResult, FileKind, ReviewIssue, ValidationReport } from '@/lib/types';
 
 /** One entry of the validation report — the per-file detail shown in the cards. */
 type FileValidation = ValidationReport['files'][number];
@@ -88,12 +89,36 @@ export function UploadPage() {
     loadSamples,
     settings,
     updateSettings,
+    getFileData,
   } = useStore();
   const navigate = useNavigate();
   const [dragging, setDragging] = React.useState(false);
   const [preview, setPreview] = React.useState<{ file: FileValidation; mode: 'raw' | 'parsed' } | null>(null);
+  const [excelModal, setExcelModal] = React.useState<{
+    open: boolean;
+    fileName: string;
+    meta: ExcelWorkbookMeta;
+    workbookData?: ExcelWorkbookParseResult;
+    tab: 'overview' | 'sheets' | 'raw' | 'diagnostics';
+  } | null>(null);
   const [acknowledged, setAcknowledged] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
+
+  const openExcelModal = (
+    file: (typeof files)[number],
+    tab: 'overview' | 'sheets' | 'raw' | 'diagnostics' = 'overview',
+  ) => {
+    const meta = file.excelWorkbookMeta ?? fileReport(file.id)?.excelWorkbookMeta;
+    if (!meta) return;
+    const fileData = getFileData ? getFileData(file.id) : undefined;
+    setExcelModal({
+      open: true,
+      fileName: file.name,
+      meta,
+      workbookData: fileData?.workbookData,
+      tab,
+    });
+  };
 
   const onDrop = async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -218,59 +243,136 @@ export function UploadPage() {
             {files.map((file) => {
               const kind = kindOf(file);
               const report = fileReport(file.id);
+              const wbMeta = file.excelWorkbookMeta ?? report?.excelWorkbookMeta;
+
               return (
                 <div key={file.id} className="rounded-lg border border-[var(--border)] p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         {kind === 'whatsapp' ? (
-                          <MessageSquare className="size-4" />
+                          <MessageSquare className="size-4 text-emerald-600" />
+                        ) : wbMeta ? (
+                          <FileSpreadsheet className="size-4 text-emerald-600" />
                         ) : kind === 'attendance' ? (
-                          <FileSpreadsheet className="size-4" />
+                          <FileSpreadsheet className="size-4 text-blue-600" />
                         ) : (
                           <AlertTriangle className="size-4 text-amber-600" />
                         )}
                         <span className="font-medium">{file.name}</span>
-                        <Badge tone={kind === 'whatsapp' ? 'info' : kind === 'attendance' ? 'primary' : 'warning'}>
-                          {FILE_KIND_LABELS[kind]}
-                        </Badge>
+                        {wbMeta ? (
+                          <Badge tone="primary">
+                            {wbMeta.isLegacyXls ? 'Legacy Excel Attendance Workbook' : 'Excel Attendance Workbook (.xlsx)'}
+                          </Badge>
+                        ) : (
+                          <Badge tone={kind === 'whatsapp' ? 'info' : kind === 'attendance' ? 'primary' : 'warning'}>
+                            {FILE_KIND_LABELS[kind]}
+                          </Badge>
+                        )}
                         {file.kindOverride ? <Badge tone="warning">type set manually</Badge> : null}
                         <Badge tone={file.detection.confidence > 0.6 ? 'success' : 'neutral'}>
                           detection {Math.round(file.detection.confidence * 100)}%
                         </Badge>
+                        {wbMeta ? (
+                          <Badge tone="neutral">{wbMeta.sheetCount} sheets</Badge>
+                        ) : null}
                         <span className="text-xs text-[var(--muted-foreground)]">
                           {(file.size / 1024).toFixed(1)} KB
                         </span>
                       </div>
 
-                      <div className="mt-3 grid gap-x-8 gap-y-1 text-sm sm:grid-cols-2 lg:grid-cols-4">
-                        {report?.kind === 'whatsapp' ? (
-                          <>
-                            <KeyValue label="Messages parsed" value={report.recordsParsed} />
-                            <KeyValue label="Staff messages" value={report.staffMessages ?? 0} />
-                            <KeyValue label="Student messages" value={report.studentMessages ?? 0} />
-                            <KeyValue label="Uncertain messages" value={report.uncertainMessages ?? 0} />
-                          </>
-                        ) : null}
-                        {report?.kind === 'attendance' ? (
-                          <>
-                            <KeyValue label="Employees" value={report.employees ?? 0} />
-                            <KeyValue label="Records parsed" value={report.records ?? 0} />
-                            <KeyValue label="Punches read" value={report.punches ?? 0} />
+                      {wbMeta ? (
+                        <div className="mt-3 space-y-3">
+                          <div className="grid gap-x-8 gap-y-1 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                            <KeyValue label="Format" value={wbMeta.formatDescription} />
+                            <KeyValue label="Sheets detected" value={wbMeta.sheetCount} />
+                            <KeyValue label="Employees" value={report?.employees ?? wbMeta.employeeCount} />
+                            <KeyValue label="Attendance logs" value={report?.punches ?? wbMeta.punchCount} />
+                            <KeyValue label="Exceptions" value={wbMeta.exceptionCount} />
+                            <KeyValue label="Statistical records" value={wbMeta.statisticalRecordCount} />
                             <KeyValue
                               label="Date range"
-                              value={`${formatDisplayDate(report.dateRange?.first ?? null)} – ${formatDisplayDate(
-                                report.dateRange?.last ?? null,
-                              )}`}
+                              value={
+                                wbMeta.dateRange.first
+                                  ? `${formatDisplayDate(wbMeta.dateRange.first)} – ${formatDisplayDate(
+                                      wbMeta.dateRange.last,
+                                    )}`
+                                  : '—'
+                              }
                             />
-                          </>
-                        ) : null}
-                        {!report ? (
-                          <p className="text-xs text-[var(--muted-foreground)]">
-                            Not parsed yet — press “Analyze attendance” to run identification and parsing.
-                          </p>
-                        ) : null}
-                      </div>
+                            <KeyValue label="Parsing errors" value={wbMeta.errorCount} />
+                            <KeyValue label="Warnings" value={wbMeta.warningCount} />
+                          </div>
+
+                          {wbMeta.sheets.some((s) => s.status !== 'Parsed') ? (
+                            <Alert tone="warning" title="Partial Sheet Warning">
+                              <p>Workbook detected but some sheets could not be parsed. Review individual sheet status below.</p>
+                            </Alert>
+                          ) : null}
+
+                          <div className="overflow-x-auto rounded-md border border-[var(--border)] bg-[var(--card)]">
+                            <table className="w-full text-xs text-left">
+                              <thead>
+                                <tr className="border-b border-[var(--border)] text-[var(--muted-foreground)]">
+                                  <th className="py-1.5 px-2.5 font-medium">Sheet Name</th>
+                                  <th className="py-1.5 px-2.5 font-medium">Detected Type</th>
+                                  <th className="py-1.5 px-2.5 font-medium">Rows</th>
+                                  <th className="py-1.5 px-2.5 font-medium">Columns</th>
+                                  <th className="py-1.5 px-2.5 font-medium">Records</th>
+                                  <th className="py-1.5 px-2.5 font-medium">Parsing Status</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {wbMeta.sheets.map((sheet) => (
+                                  <tr key={sheet.sheetName} className="border-b border-[var(--border)]/40 hover:bg-[var(--muted)]/20">
+                                    <td className="py-1.5 px-2.5 font-medium">{sheet.sheetName}</td>
+                                    <td className="py-1.5 px-2.5">
+                                      <Badge tone="primary">{sheet.typeLabel}</Badge>
+                                    </td>
+                                    <td className="py-1.5 px-2.5">{sheet.rowCount}</td>
+                                    <td className="py-1.5 px-2.5">{sheet.columnCount}</td>
+                                    <td className="py-1.5 px-2.5">{sheet.recordCount}</td>
+                                    <td className="py-1.5 px-2.5">
+                                      <Badge tone={sheet.status === 'Parsed' ? 'success' : 'warning'}>
+                                        {sheet.status === 'Parsed' ? '✓ Parsed' : '⚠ Needs review'}
+                                      </Badge>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-3 grid gap-x-8 gap-y-1 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                          {report?.kind === 'whatsapp' ? (
+                            <>
+                              <KeyValue label="Messages parsed" value={report.recordsParsed} />
+                              <KeyValue label="Staff messages" value={report.staffMessages ?? 0} />
+                              <KeyValue label="Student messages" value={report.studentMessages ?? 0} />
+                              <KeyValue label="Uncertain messages" value={report.uncertainMessages ?? 0} />
+                            </>
+                          ) : null}
+                          {report?.kind === 'attendance' ? (
+                            <>
+                              <KeyValue label="Employees" value={report.employees ?? 0} />
+                              <KeyValue label="Records parsed" value={report.records ?? 0} />
+                              <KeyValue label="Punches read" value={report.punches ?? 0} />
+                              <KeyValue
+                                label="Date range"
+                                value={`${formatDisplayDate(report.dateRange?.first ?? null)} – ${formatDisplayDate(
+                                  report.dateRange?.last ?? null,
+                                )}`}
+                              />
+                            </>
+                          ) : null}
+                          {!report ? (
+                            <p className="text-xs text-[var(--muted-foreground)]">
+                              Not parsed yet — press “Analyze attendance” to run identification and parsing.
+                            </p>
+                          ) : null}
+                        </div>
+                      )}
 
                       <ul className="mt-3 space-y-0.5 text-xs text-[var(--muted-foreground)]">
                         {file.detection.reasons.slice(0, 4).map((reason, index) => (
@@ -302,35 +404,88 @@ export function UploadPage() {
                         <option value="attendance">Attendance file</option>
                         <option value="unknown">Unrecognised</option>
                       </Select>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={!report}
-                          onClick={() => report && setPreview({ file: report, mode: 'raw' })}
-                        >
-                          <Eye /> Raw
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={!report}
-                          onClick={() => report && setPreview({ file: report, mode: 'parsed' })}
-                        >
-                          <ListChecks /> Parsed
-                        </Button>
-                        <Button variant="outline" size="sm" disabled={analyzing} onClick={runAnalysis}>
-                          <RefreshCw className={analyzing ? 'animate-spin' : ''} /> Re-analyze
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={`Remove ${file.name}`}
-                          onClick={() => removeFile(file.id)}
-                        >
-                          <X />
-                        </Button>
-                      </div>
+
+                      {wbMeta ? (
+                        <div className="flex flex-col gap-1.5 sm:w-[190px]">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openExcelModal(file, 'overview')}
+                          >
+                            <Eye className="size-3.5" /> Preview Workbook
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openExcelModal(file, 'sheets')}
+                          >
+                            <Layers className="size-3.5" /> Preview Sheets
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openExcelModal(file, 'raw')}
+                          >
+                            <FileSpreadsheet className="size-3.5" /> Preview Raw Data
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openExcelModal(file, 'diagnostics')}
+                          >
+                            <ListChecks className="size-3.5" /> Diagnostics
+                          </Button>
+                          <div className="flex gap-1.5 pt-1">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="flex-1"
+                              disabled={analyzing}
+                              onClick={runAnalysis}
+                            >
+                              <RefreshCw className={analyzing ? 'animate-spin size-3.5' : 'size-3.5'} /> Re-analyze
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`Remove ${file.name}`}
+                              onClick={() => removeFile(file.id)}
+                            >
+                              <X className="size-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={!report}
+                            onClick={() => report && setPreview({ file: report, mode: 'raw' })}
+                          >
+                            <Eye /> Raw
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={!report}
+                            onClick={() => report && setPreview({ file: report, mode: 'parsed' })}
+                          >
+                            <ListChecks /> Parsed
+                          </Button>
+                          <Button variant="outline" size="sm" disabled={analyzing} onClick={runAnalysis}>
+                            <RefreshCw className={analyzing ? 'animate-spin' : ''} /> Re-analyze
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`Remove ${file.name}`}
+                            onClick={() => removeFile(file.id)}
+                          >
+                            <X />
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -801,6 +956,19 @@ export function UploadPage() {
           </div>
         ) : null}
       </Modal>
+
+      {/* ------------------------------------------- 8. excel workbook modal */}
+      {excelModal ? (
+        <ExcelWorkbookModal
+          open={excelModal.open}
+          onClose={() => setExcelModal(null)}
+          fileName={excelModal.fileName}
+          meta={excelModal.meta}
+          workbookData={excelModal.workbookData}
+          initialTab={excelModal.tab}
+          onAnalyze={runAnalysis}
+        />
+      ) : null}
     </>
   );
 }
