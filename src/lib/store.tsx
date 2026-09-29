@@ -28,6 +28,7 @@ import type {
   AnalysisInputFile,
   AnalysisResult,
   Audience,
+  AdminReviewEntry,
   Corrections,
   FileKind,
   Settings,
@@ -78,6 +79,7 @@ interface StoreValue {
   removeMention: (messageId: string, mention: string) => void;
   setNameOverride: (whatsappName: string, employeeId: string | 'reject' | null) => void;
   dismissRecord: (auditId: string) => void;
+  setAdminReview: (auditId: string, entry: AdminReviewEntry | null) => void;
   resetCorrections: () => void;
   dismissNotice: () => void;
 }
@@ -435,6 +437,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
+  /**
+   * Records (or clears) an administrative decision for one audited day
+   * (spec 34). Every change appends to the entry's history so the decision
+   * trail — who, when, what — is preserved.
+   */
+  const setAdminReview = useCallback((auditId: string, entry: AdminReviewEntry | null) => {
+    setCorrections((current) => {
+      const next = { ...current.adminReviews };
+      if (entry === null) delete next[auditId];
+      else {
+        const previous = current.adminReviews[auditId];
+        const history = [
+          ...(previous?.history ?? []),
+          {
+            at: new Date().toISOString(),
+            by: entry.reviewer || 'unspecified reviewer',
+            action: entry.history.slice(-1)[0]?.action ?? 'Decision recorded',
+            detail: entry.notes || undefined,
+          },
+        ];
+        next[auditId] = { ...entry, history };
+      }
+      return { ...current, adminReviews: next };
+    });
+  }, []);
+
   const resetCorrections = useCallback(() => {
     setCorrections(emptyCorrections());
     setNotice('All manual corrections were reset. The audit will use the automatic results again.');
@@ -469,6 +497,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       removeMention,
       setNameOverride,
       dismissRecord,
+      setAdminReview,
       resetCorrections,
       dismissNotice: () => setNotice(null),
     }),

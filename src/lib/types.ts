@@ -1,3 +1,5 @@
+import type { WhatsAppParseDiagnostics } from './parsers/whatsapp';
+
 /**
  * MBK Attendance Audit — shared data model.
  *
@@ -195,6 +197,26 @@ export interface AttendanceRecord {
   sourceFileIds: string[];
 }
 
+/**
+ * Relationship between two uploaded attendance files (spec 48). The app never
+ * double-counts: it explains what the files appear to be and which one is used.
+ */
+export interface SourceComparison {
+  fileIds: [string, string];
+  fileNames: [string, string];
+  formats: [string, string];
+  relation: 'same-data' | 'different-view' | 'complementary' | 'conflicting' | 'unrelated';
+  relationLabel: string;
+  overlapRecords: number;
+  onlyInFirst: number;
+  onlyInSecond: number;
+  conflictingValues: number;
+  employeeOverlap: number;
+  dateOverlapDays: number;
+  explanation: string;
+  recommendation: 'use-one' | 'use-both';
+}
+
 export interface AttendanceFileSummary {
   fileId: string;
   fileName: string;
@@ -370,6 +392,8 @@ export interface AuditRecord {
   employeeName: string;
   employeeCode: string | null;
   department: string | null;
+  /** grade/class column when the attendance file provides one (spec 35 filter) */
+  grade?: string | null;
   biometric: BiometricEvaluation;
   whatsapp: WhatsAppEvidenceSlice;
   notificationStatus: NotificationStatus;
@@ -381,6 +405,109 @@ export interface AuditRecord {
   evidence: EvidenceItem[];
   /** true if this row was produced from a WhatsApp-only name (no biometric row) */
   whatsappOnly: boolean;
+}
+
+/* ------------------------------------------------------------------ *
+ * Administrative layer (spec 29–37)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Administrative excuse status. This is deliberately kept separate from the
+ * WhatsApp notification: a message saying "Teacher X is sick" means
+ * "notified = yes" but leaves the administrative excuse status UNKNOWN until an
+ * administrator records a decision (spec 29).
+ */
+export type AdminExcuseStatus = 'pending' | 'excused' | 'unexcused' | 'leave';
+
+export const ADMIN_EXCUSE_LABELS: Record<AdminExcuseStatus, string> = {
+  pending: 'Pending Review',
+  excused: 'Excused',
+  unexcused: 'Unexcused',
+  leave: 'Approved Leave',
+};
+
+export type AdminStatus =
+  | 'PERFECT_ATTENDANCE'
+  | 'SATISFACTORY'
+  | 'VERBAL_NOTICE'
+  | 'REVIEW_REQUIRED'
+  | 'CRITICAL_REVIEW';
+
+/** One administrative decision, recorded by a named reviewer with a timestamp. */
+export interface AdminReviewEntry {
+  auditId: string;
+  excuseStatus: AdminExcuseStatus;
+  /** what the administrator actually saw — never invented by the app */
+  documentation: string;
+  administrativeAction: string;
+  notes: string;
+  reviewer: string;
+  decidedAt: string;
+  attachedFileName?: string;
+  attachedFileSize?: number;
+  /** manual correction of the attendance values for this day */
+  correction?: {
+    firstPunch?: number | null;
+    lastPunch?: number | null;
+  };
+  history: { at: string; by: string; action: string; detail?: string }[];
+}
+
+/** A row of the itemized absence / late arrival log (spec 33). */
+export interface AdminLogRow {
+  id: string;
+  date: string;
+  employeeId: string;
+  employeeName: string;
+  department: string | null;
+  grade: string | null;
+  type: 'LATE' | 'FULL_ABSENT' | 'SICK' | 'LEFT_EARLY' | 'OTHER';
+  typeLabel: string;
+  recordedTimeIn: string | null;
+  whatsappNotified: 'yes' | 'no' | 'uncertain';
+  reasonProvided: string;
+  excuseStatus: AdminExcuseStatus;
+  documentation: string;
+  administrativeAction: string;
+  reviewer: string | null;
+  decidedAt: string | null;
+  matchedLateMinutes: number | null;
+  auditId: string;
+}
+
+/** Per-teacher totals behind the administrative summary (spec 29/31/32). */
+export interface AdminTeacherStats {
+  employeeId: string;
+  employeeName: string;
+  employeeCode: string | null;
+  department: string | null;
+  grade: string | null;
+  fullAbsencesExcused: number;
+  fullAbsencesUnexcused: number;
+  fullAbsencesPending: number;
+  sickDays: number;
+  leftEarlyDays: number;
+  lateOccurrences: number;
+  totalLateMinutes: number;
+  expectedWorkingDays: number;
+  presentDays: number;
+  excusedExcludedDays: number;
+  attendanceRate: number | null;
+  rateDetail: {
+    expectedWorkingDays: number;
+    present: number;
+    excludedExcused: number;
+    excludedLeave: number;
+    excludedHolidays: number;
+    countedDays: number;
+    explanation: string;
+  };
+  whatsappNotifications: number;
+  status: AdminStatus;
+  statusLabel: string;
+  statusReason: string;
+  statusRule: string;
+  statusTone: 'success' | 'info' | 'warning' | 'danger';
 }
 
 /* ------------------------------------------------------------------ *
@@ -413,6 +540,10 @@ export interface ReviewIssue {
   auditId?: string;
   whatsappName?: string;
   date?: string;
+  /** what the administrator can do about it (never a guess at the data) */
+  suggestion?: string;
+  /** true when this problem stops an honest analysis from being produced */
+  critical?: boolean;
   resolved: boolean;
 }
 
@@ -425,6 +556,21 @@ export interface ValidationReport {
     reasons: string[];
     warnings: string[];
     recordsParsed: number;
+    /** per-file detail shown on the upload screen (spec 45/46/49) */
+    staffMessages?: number;
+    studentMessages?: number;
+    uncertainMessages?: number;
+    employees?: number;
+    records?: number;
+    punches?: number;
+    dateRange?: { first: string | null; last: string | null };
+    /** first lines exactly as they appear in the file (spec 46) */
+    previewRaw?: string[];
+    /** first parsed records, rendered as readable key/value lines (spec 46) */
+    previewParsed?: string[];
+    /** structural evidence from the WhatsApp parser (spec 45) */
+    diagnostics?: WhatsAppParseDiagnostics;
+    critical?: boolean;
   }[];
   totals: {
     files: number;
@@ -440,6 +586,9 @@ export interface ValidationReport {
     employeesRequiringReview: number;
     unmatchedNames: number;
     parseProblems: number;
+    /** parsing problems that block an honest analysis (spec 51) */
+    criticalProblems: number;
+    warningProblems: number;
   };
   dateRange: { first: string | null; last: string | null };
   problems: ReviewIssue[];
@@ -493,6 +642,55 @@ export interface Settings {
   persistToBrowser: boolean;
   /** shown on reports and in the application header */
   schoolName: string;
+
+  /* --- administrative thresholds (spec 30) — never hard-coded --- */
+  adminRules: {
+    /** Perfect Attendance: at most this many absences (default 0) */
+    perfectMaxAbsences: number;
+    /** Perfect Attendance: at most this many late occurrences (default 0) */
+    perfectMaxLate: number;
+    /** Satisfactory: attendance rate at or above this percentage */
+    satisfactoryMinRate: number;
+    /** Satisfactory: late occurrences at or below this number */
+    satisfactoryMaxLate: number;
+    /** Verbal Notice: late occurrences at or above this number */
+    verbalNoticeMinLate: number;
+    /** Review Required: attendance rate below this percentage */
+    reviewMaxRate: number;
+    /** Review Required: late occurrences at or above this number */
+    reviewMaxLate: number;
+    /** Review Required: unexcused absences at or above this number */
+    reviewMaxUnexcused: number;
+    /** Review Required: total confirmed late minutes at or above this number (0 = rule disabled) */
+    reviewMaxLateMinutes: number;
+    /** Critical Review: attendance rate below this percentage */
+    criticalMaxRate: number;
+    /** Critical Review: unexcused absences at or above this number */
+    criticalMaxUnexcused: number;
+  };
+
+  /* --- attendance rate calculation (spec 32) --- */
+  attendanceRate: {
+    excludeApprovedLeave: boolean;
+    excludeExcusedAbsence: boolean;
+    excludeHolidays: boolean;
+    excludeWeekends: boolean;
+    excludeOtherApproved: boolean;
+  };
+
+  /**
+   * Spec 31: late minutes come from biometric evidence only. When no biometric
+   * record exists, the administrator may explicitly opt in to estimating the
+   * duration from the WhatsApp message.
+   */
+  estimateLateFromWhatsApp: boolean;
+
+  /**
+   * Spec 48: which attendance source is used when the uploaded files describe
+   * the same period. 'auto' prefers the most complete record per day,
+   * 'both' merges every file, or a concrete file id makes that file primary.
+   */
+  primaryAttendanceSource: 'auto' | 'both' | string;
 }
 
 /* ------------------------------------------------------------------ *
@@ -512,6 +710,8 @@ export interface Corrections {
   nameOverrides: Record<string, string | 'reject'>;
   /** audit record ids that were dismissed as not applicable */
   dismissedRecords: string[];
+  /** audit record id -> administrative decision (spec 34) */
+  adminReviews: Record<string, AdminReviewEntry>;
 }
 
 export function emptyCorrections(): Corrections {
@@ -522,6 +722,7 @@ export function emptyCorrections(): Corrections {
     addedSubjects: {},
     nameOverrides: {},
     dismissedRecords: [],
+    adminReviews: {},
   };
 }
 
@@ -633,6 +834,16 @@ export interface AnalysisResult {
   summary: AnalysisSummary;
   validation: ValidationReport;
   reviewIssues: ReviewIssue[];
+  /** overlap between the uploaded attendance files (spec 48) */
+  sourceComparison: SourceComparison[];
+  /** which source was used for each overlapping day (spec 48) */
+  sourceNotes: string[];
+  /** administrative layer recomputed from the audited rows (spec 29–37) */
+  admin: {
+    teacherStats: AdminTeacherStats[];
+    log: AdminLogRow[];
+    reviews: Record<string, AdminReviewEntry>;
+  };
   coverage: {
     dates: string[];
     workingDates: string[];

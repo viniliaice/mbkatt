@@ -39,6 +39,31 @@ export const DEFAULT_SETTINGS: Settings = {
 
   persistToBrowser: true,
   schoolName: 'MBK School',
+
+  // Administrative thresholds (spec 30). Every value is editable in Settings;
+  // none of them is a disciplinary decision by itself.
+  adminRules: {
+    perfectMaxAbsences: 0,
+    perfectMaxLate: 0,
+    satisfactoryMinRate: 90,
+    satisfactoryMaxLate: 2,
+    verbalNoticeMinLate: 3,
+    reviewMaxRate: 85,
+    reviewMaxLate: 6,
+    reviewMaxUnexcused: 1,
+    reviewMaxLateMinutes: 0,
+    criticalMaxRate: 75,
+    criticalMaxUnexcused: 3,
+  },
+  attendanceRate: {
+    excludeApprovedLeave: true,
+    excludeExcusedAbsence: true,
+    excludeHolidays: true,
+    excludeWeekends: true,
+    excludeOtherApproved: true,
+  },
+  estimateLateFromWhatsApp: false,
+  primaryAttendanceSource: 'auto',
 };
 
 export function settingsWithDefaults(partial: Partial<Settings> | null | undefined): Settings {
@@ -50,6 +75,9 @@ export function settingsWithDefaults(partial: Partial<Settings> | null | undefin
     lateCutoffByWeekday: { ...(partial.lateCutoffByWeekday ?? DEFAULT_SETTINGS.lateCutoffByWeekday) },
     holidayDates: partial.holidayDates ?? DEFAULT_SETTINGS.holidayDates,
     extraWorkingDates: partial.extraWorkingDates ?? DEFAULT_SETTINGS.extraWorkingDates,
+    // nested objects must be merged, never replaced wholesale
+    adminRules: { ...DEFAULT_SETTINGS.adminRules, ...(partial.adminRules ?? {}) },
+    attendanceRate: { ...DEFAULT_SETTINGS.attendanceRate, ...(partial.attendanceRate ?? {}) },
   };
 }
 

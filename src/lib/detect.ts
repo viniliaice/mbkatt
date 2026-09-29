@@ -13,6 +13,18 @@ const WHATSAPP_LINE =
 
 const WHATSAPP_AUTHOR = /^\s*(?:\[[^\]]+\]|\d{1,4}[-/.]\d{1,2}[-/.]\d{2,4},\s*\d{1,2}[:.]\d{2}(?::\d{2})?\s*(?:[AaPp]\.?\s?[Mm]\.?)?)\s*[-–—]?\s*[^:]{1,60}:\s?\S/;
 
+/**
+ * Markdown chat exports (spec 39 formats B/F) look nothing like a raw WhatsApp
+ * .txt export, so they get their own structural patterns. Detection looks at
+ * the *shape* of the file, never at stray words such as "date" or "late".
+ */
+const MD_TIME_SENDER = /^\s*\[\s*\d{1,2}[:.]\d{2}(?::\d{2})?\s*(?:[AaPp]\.?\s?[Mm]\.?)?\s*\]\s*\*{0,2}[^*:]{1,60}\*{0,2}\s*[:：]/;
+
+const MD_DATE_HEADING =
+  /^\s*(?:#{1,6}\s+)?(?:\*\*|__)?\s*(?:\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})\s*(?:\*\*|__)?\s*$/;
+
+const ISO_CHAT_HEADER = /^\s*\[\s*\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}/;
+
 const ATTENDANCE_MARKERS = [
   'clock in',
   'clock out',
@@ -82,6 +94,9 @@ export function detectFileType(fileName: string, text: string): DetectionResult 
 
   const whatsappHeaderRatio = countMatches(lines, (line) => WHATSAPP_LINE.test(line));
   const whatsappAuthorRatio = countMatches(lines, (line) => WHATSAPP_AUTHOR.test(line));
+  const mdTimeSenderRatio = countMatches(lines, (line) => MD_TIME_SENDER.test(line));
+  const mdHeadingCount = lines.filter((line) => MD_DATE_HEADING.test(line)).length;
+  const isoChatRatio = countMatches(lines, (line) => ISO_CHAT_HEADER.test(line));
 
   const dateLikeHeaders = lines
     .slice(0, 8)
@@ -100,6 +115,21 @@ export function detectFileType(fileName: string, text: string): DetectionResult 
 
   let whatsappScore = whatsappHeaderRatio * 2 + whatsappAuthorRatio * 2;
   let attendanceScore = 0;
+
+  if (mdTimeSenderRatio > 0.15) {
+    whatsappScore += mdTimeSenderRatio * 3;
+    reasons.push(
+      `${Math.round(mdTimeSenderRatio * 100)}% of lines match the markdown chat pattern "[time] **Sender:** message".`,
+    );
+  }
+  if (mdHeadingCount >= 2) {
+    whatsappScore += 1;
+    reasons.push(`${mdHeadingCount} date heading(s) in markdown style (e.g. "## 1 September 2026").`);
+  }
+  if (isoChatRatio > 0.15) {
+    whatsappScore += isoChatRatio * 2;
+    reasons.push(`${Math.round(isoChatRatio * 100)}% of lines start with an ISO chat timestamp ([YYYY-MM-DD HH:MM]).`);
+  }
 
   if (isXlsx) {
     attendanceScore += 3;
@@ -131,6 +161,16 @@ export function detectFileType(fileName: string, text: string): DetectionResult 
     attendanceScore += 0.2;
   }
 
+  const chatShaped =
+    whatsappHeaderRatio > 0.3 ||
+    mdTimeSenderRatio > 0.15 ||
+    isoChatRatio > 0.15 ||
+    (mdHeadingCount >= 3 && mdTimeSenderRatio > 0.05);
+  if (chatShaped && markerHits.length > 0) {
+    warnings.push(
+      'The file contains chat timestamps *and* spreadsheet-like words — the chat structure was given priority. Check the detected type if this is wrong.',
+    );
+  }
   if (whatsappHeaderRatio > 0.3) {
     reasons.push(
       `${Math.round(whatsappHeaderRatio * 100)}% of lines start with a WhatsApp timestamp header.`,

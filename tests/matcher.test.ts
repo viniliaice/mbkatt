@@ -102,3 +102,64 @@ describe('name matching', () => {
     expect(matches.find((match) => match.whatsappName === 'T. Axmed jaamc')?.employeeId).toBe('e3');
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Specification 42–44: partial names, prefixes and the person-matching
+ * layer must work without a full name and without merging on one word.
+ * ------------------------------------------------------------------ */
+
+describe('specification 42–44 — partial names and prefixes', () => {
+  it('normalises school prefixes, slashes, backslashes and apostrophes', () => {
+    // the same person written five different ways
+    const keys = [
+      normalizeName('C/Wasac Maxamed Sicid'),
+      normalizeName('c\\wasac'),
+      normalizeName('C. Wasac'),
+      normalizeName("T. Axmed Jaamac"),
+      normalizeName('Teacher Axmed'),
+    ];
+    expect(keys[0]).toBe('c wasac maxamed sicid');
+    // "c\wasac" keeps the c as an initial, matching the C/ prefix form
+    expect(keys[1]).toBe('c wasac');
+    expect(keys[2]).toBe('c wasac');
+    expect(keys[3]).toBe('axmed jaamac');
+    expect(keys[4]).toBe('axmed');
+  });
+
+  it('keeps a short WhatsApp name parseable and matchable to a full attendance name', () => {
+    const index = buildEmployeeIndex([
+      employee('e1', 'Fardosa Kamal'),
+      employee('e2', 'Ikram Axmed'),
+      employee('e3', 'Ahmed Jaamac Ism'),
+    ]);
+
+    // "Fardosa" → Fardosa Kamal
+    const fardosa = matchEmployeeName('Fardosa', index, DEFAULT_SETTINGS);
+    expect(fardosa.employeeId).toBe('e1');
+    expect(fardosa.tier === 'matched' || fardosa.tier === 'possible').toBe(true);
+
+    // "Ikraam" (spelling variant) → Ikram Axmed
+    const ikraam = matchEmployeeName('Ikraam', index, DEFAULT_SETTINGS);
+    expect(ikraam.employeeId).toBe('e2');
+
+    // "T. Axmed Jaamac" → Ahmed Jaamac Ism (titles and one extra middle name)
+    const axmed = matchEmployeeName('T. Axmed Jaamac', index, DEFAULT_SETTINGS);
+    expect(axmed.employeeId).toBe('e3');
+  });
+
+  it('never merges two different people who share one name', () => {
+    const index = buildEmployeeIndex([
+      employee('e1', 'Fardosa Kamal'),
+      employee('e2', 'Fardosa Omar'),
+    ]);
+    const ambiguous = matchEmployeeName('Fardosa', index, DEFAULT_SETTINGS);
+    expect(ambiguous.tier).toBe('possible');
+    expect(ambiguous.alternatives.length).toBeGreaterThan(0);
+  });
+
+  it('matches c\\wasac to the C/ prefix employee', () => {
+    const index = buildEmployeeIndex([employee('e1', 'C/Wasac Maxamed Sicid'), employee('e2', 'Cali Kamal')]);
+    const match = matchEmployeeName('c\\wasac', index, DEFAULT_SETTINGS);
+    expect(match.employeeId).toBe('e1');
+  });
+});

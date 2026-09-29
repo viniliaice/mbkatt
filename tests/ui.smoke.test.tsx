@@ -15,6 +15,7 @@ import { analyze } from '@/lib/analyze';
 import { detectFileType } from '@/lib/detect';
 import { emptyCorrections, type AnalysisInputFile, type AnalysisResult, type UploadedFileMeta } from '@/lib/types';
 import { AppShell } from '@/components/AppShell';
+import { AdministrativeReportPage } from '@/pages/AdministrativeReportPage';
 import { AuditPage } from '@/pages/AuditPage';
 import { DashboardPage } from '@/pages/Dashboard';
 import { DiscrepanciesPage } from '@/pages/DiscrepanciesPage';
@@ -115,11 +116,29 @@ describe('UI smoke tests with a real analysis result', () => {
     expect(html).not.toContain('bootstrapping');
   });
 
-  it('renders the upload/validation page with real parsed counts', () => {
+  it('renders the upload/validation page with real parsed counts (spec 38–51)', () => {
     const html = render(<UploadPage />);
-    expect(html).toContain('Analyze attendance');
+    expect(html).toContain('Re-analyze'); // the analysis already ran in this fixture
+    expect(html).toContain('Files detected');
+    expect(html).toContain('WhatsApp parsing diagnostics');
+    expect(html).toContain('Validation before analysis');
+    expect(html).toContain('Parsing problems by category');
+    expect(html).toContain('Attendance file comparison');
     expect(html).toContain(String(result.validation.totals.whatsappMessages));
     expect(html).toContain(String(result.validation.totals.attendanceEmployees));
+    expect(html).toContain(String(result.validation.totals.staffMessages));
+  });
+
+  it('renders the administrative report with the teacher summary and the itemized log', () => {
+    const html = render(<AdministrativeReportPage />);
+    expect(html).toContain('Teacher Attendance Administrative Summary');
+    expect(html).toContain('Full Absences (Excused)');
+    expect(html).toContain('Full Absences (Unexcused)');
+    expect(html).toContain('Total Late Time (Mins)');
+    expect(html).toContain('Administrative Status');
+    expect(html).toContain('Itemized absence &amp; late log');
+    // the source-data honesty rules are visible on screen
+    expect(html).toContain('Pending Review');
   });
 
   it('renders the daily audit table with employee names and verdicts', () => {

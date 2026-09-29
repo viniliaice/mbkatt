@@ -2,8 +2,8 @@ import { CheckCircle2, ClipboardCheck, RefreshCw, RotateCcw, ShieldQuestion, XCi
 import * as React from 'react';
 import { PageHeader } from '@/components/AppShell';
 import { EvidenceModal } from '@/components/EvidencePanel';
-import { AudienceBadge, TierBadge } from '@/components/StatusBadges';
-import { Alert, Badge, Button, Card, Checkbox, EmptyState, Separator, Tabs } from '@/components/ui';
+import { AudienceBadge, ConfidenceBadge, TierBadge } from '@/components/StatusBadges';
+import { Alert, Badge, Button, Card, CardContent, Checkbox, EmptyState, Input, Separator, Tabs } from '@/components/ui';
 import { EVENT_FILTER_ORDER, EVENT_LABELS } from '@/lib/statuses';
 import { useStore } from '@/lib/store';
 import type {
@@ -227,6 +227,161 @@ function NameMatchActions({ issue, result }: { issue: ReviewIssue; result: Analy
   );
 }
 
+/**
+ * Person matching layer (spec 43/44): every name used in WhatsApp with its
+ * candidate employees, confidence, reason, current match and manual controls.
+ */
+function PersonMatchingTable({ result }: { result: AnalysisResult }) {
+  const { setNameOverride, addAlias, corrections } = useStore();
+  const [search, setSearch] = React.useState('');
+
+  const matches = result.nameMatches
+    .filter((match) => {
+      if (!search.trim()) return true;
+      const needle = search.trim().toLowerCase();
+      const haystack = [match.whatsappName, match.employeeName ?? '', ...match.alternatives.map((alt) => alt.employeeName)]
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(needle);
+    })
+    .sort((a, b) => b.occurrences - a.occurrences || a.whatsappName.localeCompare(b.whatsappName));
+
+  return (
+    <Card>
+      <CardContent className="space-y-4 pt-5">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold">Person matching</h2>
+            <p className="max-w-3xl text-sm text-[var(--muted-foreground)]">
+              WhatsApp names are parsed first and matched to attendance employees afterwards — never the other way
+              round. Short names, titles, initials, punctuation and Somali transliteration variants are all considered;
+              one shared name is never enough to merge two people.
+            </p>
+          </div>
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Filter names…"
+            className="w-64"
+          />
+        </div>
+
+        {matches.length === 0 ? (
+          <EmptyState
+            title="No names match the filter"
+            description="Clear the search box to see every WhatsApp name found in the export."
+          />
+        ) : (
+          <div className="space-y-3">
+            {matches.map((match) => {
+              const override = corrections.nameOverrides[match.whatsappName];
+              const candidates = [
+                ...(match.employeeId
+                  ? [
+                      {
+                        employeeId: match.employeeId,
+                        employeeName: match.employeeName ?? '',
+                        confidence: match.confidence,
+                        current: true,
+                      },
+                    ]
+                  : []),
+                ...match.alternatives.map((alt) => ({ ...alt, current: false })),
+              ].filter(
+                (candidate, index, list) =>
+                  candidate.employeeId && list.findIndex((entry) => entry.employeeId === candidate.employeeId) === index,
+              );
+
+              return (
+                <div key={match.whatsappName} className="rounded-lg border border-[var(--border)] p-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">“{match.whatsappName}”</span>
+                    <TierBadge tier={match.tier} />
+                    <ConfidenceBadge score={match.confidence} />
+                    <Badge tone="neutral">{match.occurrences}× in the chat</Badge>
+                    {override ? <Badge tone="warning">manual decision recorded</Badge> : null}
+                  </div>
+                  <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                    Method: {match.method}
+                    {match.reasons.length > 0 ? ` — ${match.reasons.join(' ')}` : ''}
+                  </p>
+
+                  <div className="mt-3 space-y-2">
+                    {candidates.length === 0 ? (
+                      <p className="text-sm text-[var(--muted-foreground)]">
+                        No similar employee was found in the attendance files — nothing is guessed. If this person works
+                        at the school, add them to the attendance file (or check the spelling) and re-run.
+                      </p>
+                    ) : (
+                      candidates.map((candidate) => (
+                        <div
+                          key={candidate.employeeId}
+                          className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2 ${
+                            candidate.current ? 'border-[var(--primary)] bg-[var(--primary)]/5' : 'border-[var(--border)]'
+                          }`}
+                        >
+                          <span className="text-sm">
+                            {candidate.employeeName}{' '}
+                            <span className="text-[var(--muted-foreground)]">
+                              — confidence {candidate.confidence}%
+                              {candidate.current ? ' · current match' : ' · alternative'}
+                            </span>
+                          </span>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setNameOverride(match.whatsappName, candidate.employeeId)}
+                            >
+                              <CheckCircle2 /> Select this person
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setNameOverride(match.whatsappName, candidate.employeeId);
+                                addAlias({
+                                  whatsappName: match.whatsappName,
+                                  employeeId: candidate.employeeId,
+                                  employeeName: candidate.employeeName,
+                                });
+                              }}
+                            >
+                              Save mapping
+                            </Button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button size="sm" variant="ghost" onClick={() => setNameOverride(match.whatsappName, 'reject')}>
+                      <XCircle /> Not an employee
+                    </Button>
+                    {override ? (
+                      <Button size="sm" variant="ghost" onClick={() => setNameOverride(match.whatsappName, null)}>
+                        <RotateCcw /> Reset to automatic
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <Alert tone="info" title="Mappings are kept for the current analysis">
+          <p>
+            “Save mapping” adds the pairing to the alias list (visible in Settings) so it applies automatically the next
+            time the analysis runs. Manual mappings and the automatic confidence score are always shown side by side.
+          </p>
+        </Alert>
+      </CardContent>
+    </Card>
+  );
+}
+
 function IssueCard({
   issue,
   result,
@@ -313,7 +468,7 @@ function IssueCard({
 
 export function ReviewPage() {
   const { result, corrections, resetCorrections, runAnalysis, analyzing } = useStore();
-  const [tab, setTab] = React.useState<'all' | ReviewIssueType>('all');
+  const [tab, setTab] = React.useState<'all' | 'matching' | ReviewIssueType>('all');
   const [evidenceId, setEvidenceId] = React.useState<string | null>(null);
 
   if (!result) {
@@ -332,7 +487,7 @@ export function ReviewPage() {
 
   const issues = result.reviewIssues;
   const counts = TYPE_ORDER.map((type) => ({ type, count: issues.filter((issue) => issue.type === type).length }));
-  const visible = tab === 'all' ? issues : issues.filter((issue) => issue.type === tab);
+  const visible = tab === 'all' || tab === 'matching' ? issues : issues.filter((issue) => issue.type === tab);
   const correctionCount =
     Object.keys(corrections.audience).length +
     Object.keys(corrections.events).length +
@@ -370,12 +525,13 @@ export function ReviewPage() {
         </Alert>
       ) : null}
 
-      <Tabs<'all' | ReviewIssueType>
+      <Tabs<'all' | 'matching' | ReviewIssueType>
         className="mb-4"
         value={tab}
         onChange={setTab}
         tabs={[
           { value: 'all', label: 'All items', count: issues.length },
+          { value: 'matching', label: 'Person matching', count: result.nameMatches.length },
           ...counts.map((entry) => ({
             value: entry.type,
             label: TYPE_LABELS[entry.type],
@@ -384,7 +540,9 @@ export function ReviewPage() {
         ]}
       />
 
-      {visible.length === 0 ? (
+      {tab === 'matching' ? <PersonMatchingTable result={result} /> : null}
+
+      {tab === 'matching' ? null : visible.length === 0 ? (
         <EmptyState
           icon={<ClipboardCheck className="size-8" />}
           title="Nothing to review in this category"

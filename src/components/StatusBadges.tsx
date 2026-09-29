@@ -1,6 +1,8 @@
 import { AlertTriangle, Check, CircleHelp, ShieldAlert, XCircle } from 'lucide-react';
 import { Badge } from '@/components/ui';
 import { cn } from '@/lib/cn';
+import { ADMIN_STATUS_LABELS, ADMIN_STATUS_TONES } from '@/lib/admin';
+import { ADMIN_EXCUSE_LABELS } from '@/lib/types';
 import {
   BIOMETRIC_STATUS_SHORT,
   BIOMETRIC_STATUS_TONE,
@@ -10,6 +12,8 @@ import {
   NOTIFICATION_TONE,
 } from '@/lib/statuses';
 import type {
+  AdminExcuseStatus,
+  AdminStatus,
   Audience,
   BiometricEvaluation,
   MatchTier,
@@ -149,4 +153,49 @@ export function ConfidenceBadge({
 export function ConfidenceLabel({ value }: { value: 'high' | 'medium' | 'low' }) {
   const tone = value === 'high' ? 'success' : value === 'medium' ? 'warning' : 'danger';
   return <Badge tone={tone}>{value === 'high' ? 'High' : value === 'medium' ? 'Medium' : 'Low'}</Badge>;
+}
+
+/* ------------------------------------------------------------------ *
+ * Administrative badges (spec 29–34)
+ * ------------------------------------------------------------------ */
+
+export function AdminStatusBadge({
+  status,
+  label,
+  tone,
+  reason,
+  className,
+}: {
+  status?: AdminStatus;
+  label?: string;
+  tone?: 'success' | 'info' | 'warning' | 'danger';
+  reason?: string;
+  className?: string;
+}) {
+  const resolvedTone = tone ?? (status ? ADMIN_STATUS_TONES[status] : 'neutral');
+  const text = label ?? (status ? ADMIN_STATUS_LABELS[status] : '—');
+  return (
+    <Badge tone={resolvedTone} className={className} title={reason}>
+      {text}
+    </Badge>
+  );
+}
+
+export function ExcuseStatusBadge({ status }: { status: AdminExcuseStatus }) {
+  const tone: Record<AdminExcuseStatus, 'success' | 'danger' | 'warning' | 'info'> = {
+    excused: 'success',
+    unexcused: 'danger',
+    pending: 'warning',
+    leave: 'info',
+  };
+  return <Badge tone={tone[status]}>{ADMIN_EXCUSE_LABELS[status]}</Badge>;
+}
+
+export function LateMinutesBadge({ minutes, estimated }: { minutes: number; estimated?: boolean }) {
+  if (minutes <= 0) return <span className="text-[var(--muted-foreground)]">—</span>;
+  return (
+    <Badge tone={estimated ? 'warning' : 'danger'}>
+      {minutes} min{estimated ? ' (estimated)' : ''}
+    </Badge>
+  );
 }

@@ -44,6 +44,19 @@ import { minutesToClock } from './time';
 import { normalizeName } from './normalize';
 
 export const UNMATCHED_PREFIX = 'wa-unmatched:';
+
+/**
+ * Grade/class value from the attendance row, when the file has such a column.
+ * Nothing is inferred when the column is absent.
+ */
+export function gradeFromRawRow(rawRow: Record<string, string>): string | null {
+  for (const [key, value] of Object.entries(rawRow ?? {})) {
+    if (!/grade|class|fasal|grado|darajad|sanad/i.test(key)) continue;
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return null;
+}
 export const NOT_IN_ATTENDANCE_PREFIX = 'wa-only:';
 
 export interface AuditContext {
@@ -262,6 +275,7 @@ export function buildAudit(context: AuditContext): AuditOutput {
         employeeName: employee.name,
         employeeCode: employee.employeeCode,
         department: employee.department,
+        grade: gradeFromRawRow(employee.rawRow),
         biometric,
         whatsapp: slice,
         notificationStatus: derived.notificationStatus,

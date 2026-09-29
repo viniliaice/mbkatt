@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom';
 import { AppShell } from '@/components/AppShell';
 import { StoreProvider } from '@/lib/store';
+import { AdministrativeReportPage } from '@/pages/AdministrativeReportPage';
 import { AuditPage } from '@/pages/AuditPage';
 import { DashboardPage } from '@/pages/Dashboard';
 import { DiscrepanciesPage } from '@/pages/DiscrepanciesPage';
@@ -24,6 +25,7 @@ const router = createBrowserRouter([
       { index: true, element: <DashboardPage /> },
       { path: 'upload', element: <UploadPage /> },
       { path: 'audit', element: <AuditPage /> },
+      { path: 'administrative', element: <AdministrativeReportPage /> },
       { path: 'employees', element: <EmployeesPage /> },
       { path: 'whatsapp', element: <WhatsAppPage /> },
       { path: 'unnotified', element: <UnnotifiedPage /> },

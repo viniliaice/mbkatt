@@ -17,7 +17,7 @@ import {
   weekdayIndex,
 } from './dates';
 import { parseAttendanceFile, type AttendanceParseResult } from './parsers/attendance';
-import { parseWhatsAppExport } from './parsers/whatsapp';
+import { parseWhatsAppExport, type WhatsAppParseDiagnostics } from './parsers/whatsapp';
 import { buildAudit, isAuditableMessage, UNMATCHED_PREFIX } from './audit';
 import { reclassifyMessage, type ClassifyContext } from './classify';
 import { normalizeName, nameTokens } from './normalize';
@@ -42,6 +42,14 @@ import type {
   ValidationReport,
   WhatsAppMessage,
 } from './types';
+import {
+  chooseRecord,
+  compareAttendanceSources,
+  describeSourceNotes,
+  type MergeDecision,
+  type MergePreference,
+} from './sources';
+import { buildAdminLog, buildAdminTeacherStats } from './admin';
 import { emptyCorrections } from './types';
 
 export interface AnalyzeOptions {
@@ -77,6 +85,7 @@ export function analyze(options: AnalyzeOptions): AnalysisResult {
     unparsed: { lineNumber: number; raw: string; reason: string }[];
     detectedDateOrder: 'MDY' | 'DMY';
     orderAmbiguous: boolean;
+    diagnostics: WhatsAppParseDiagnostics;
   }[] = [];
 
   for (const file of options.files) {
@@ -107,6 +116,7 @@ export function analyze(options: AnalyzeOptions): AnalysisResult {
         unparsed: result.unparsed,
         detectedDateOrder: result.detectedDateOrder,
         orderAmbiguous: result.orderAmbiguous,
+        diagnostics: result.diagnostics,
       });
       warnings.push(...result.warnings.map((warning) => `${file.meta.name}: ${warning}`));
     } else {
@@ -119,7 +129,15 @@ export function analyze(options: AnalyzeOptions): AnalysisResult {
   progress('Merging attendance records', 0.25);
 
   /* ------------------------------------------------- 2. merge attendance data */
-  const { employees, records, attendanceFiles } = mergeAttendance(attendanceResults);
+  const merged = mergeAttendance(attendanceResults, {
+    primaryAttendanceSource: settings.primaryAttendanceSource,
+  });
+  const { employees, records, attendanceFiles } = merged;
+  const sourceComparison = compareAttendanceSources({
+    summaries: attendanceFiles,
+    perFileRecords: merged.perFileRecords,
+  });
+  const sourceNotes = describeSourceNotes(merged.mergeDecisions);
 
   /* ---------------------------------------------------- 3. classifier context */
   const aliases = options.aliases ?? [];
@@ -255,6 +273,8 @@ export function analyze(options: AnalyzeOptions): AnalysisResult {
     records: auditRecords,
     employeeSummaries,
     nameMatches,
+    // replaced with the real count once the review centre has run (below)
+
     messagesTotal: messages.filter((message) => !message.isSystem).length,
     staffMessages: messages.filter((message) => !message.isSystem && message.classification.audience === 'staff').length,
     studentMessages: messages.filter((message) => !message.isSystem && message.classification.audience === 'student').length,
@@ -280,6 +300,20 @@ export function analyze(options: AnalyzeOptions): AnalysisResult {
     summary,
     auditRecords,
   });
+
+  /* ---------------------------------------------------- 11. administrative layer */
+  progress('Building administrative summary', 0.95);
+
+  const adminReviews = corrections.adminReviews ?? {};
+  const adminTeacherStats = buildAdminTeacherStats({
+    records: auditRecords,
+    workingDates,
+    settings,
+    reviews: adminReviews,
+  });
+  const adminLog = buildAdminLog(auditRecords, adminReviews);
+
+  summary.reviewItems = reviewIssues.length;
 
   progress('Done', 1);
 
@@ -340,6 +374,13 @@ export function analyze(options: AnalyzeOptions): AnalysisResult {
     summary,
     validation,
     reviewIssues,
+    sourceComparison,
+    sourceNotes,
+    admin: {
+      teacherStats: adminTeacherStats,
+      log: adminLog,
+      reviews: adminReviews,
+    },
     coverage: {
       dates,
       workingDates,
@@ -443,10 +484,15 @@ export function collectSubjectNames(
 
 export function mergeAttendance(
   results: { file: AnalysisInputFile; result: AttendanceParseResult }[],
+  preferenceInput: { primaryAttendanceSource?: string } = {},
 ): {
   employees: AttendanceEmployee[];
   records: AttendanceRecord[];
   attendanceFiles: AttendanceFileSummary[];
+  /** raw, per-file records with canonical employee ids (spec 48 comparison) */
+  perFileRecords: Map<string, AttendanceRecord[]>;
+  /** which source was used for every employee-day present in several files */
+  mergeDecisions: MergeDecision[];
 } {
   const canonical: AttendanceEmployee[] = [];
   const byCode = new Map<string, AttendanceEmployee>();
@@ -492,30 +538,65 @@ export function mergeAttendance(
     }
   }
 
-  const recordByKey = new Map<string, AttendanceRecord>();
-  for (const { result } of results) {
-    for (const record of result.records) {
+  const preference: MergePreference = {
+    primaryAttendanceSource: preferenceInput.primaryAttendanceSource ?? 'auto',
+  };
+
+  /** canonical records grouped per file — used for the source comparison */
+  const perFileRecords = new Map<string, AttendanceRecord[]>();
+  /** every candidate record for one employee-day, with its provenance */
+  const grouped = new Map<
+    string,
+    { record: AttendanceRecord; fileId: string; fileName: string; fileIndex: number }[]
+  >();
+
+  results.forEach((entry, fileIndex) => {
+    const list = perFileRecords.get(entry.file.meta.id) ?? [];
+    for (const record of entry.result.records) {
       const employeeId = idMap.get(record.employeeId) ?? record.employeeId;
+      const canonicalRecord: AttendanceRecord = { ...record, employeeId };
+      list.push(canonicalRecord);
       const key = `${employeeId}__${record.date}`;
-      const existing = recordByKey.get(key);
-      if (!existing) {
-        recordByKey.set(key, {
-          ...record,
-          key,
-          employeeId,
-          punches: [...record.punches],
-          cells: [...record.cells],
-          markers: [...record.markers],
-          parseWarnings: [...record.parseWarnings],
-          sourceFileIds: [...record.sourceFileIds],
-        });
-        continue;
-      }
-      existing.cells.push(...record.cells);
-      existing.punches.push(...record.punches);
-      existing.markers = [...new Set([...existing.markers, ...record.markers])];
-      existing.parseWarnings = [...new Set([...existing.parseWarnings, ...record.parseWarnings])];
-      existing.sourceFileIds = [...new Set([...existing.sourceFileIds, ...record.sourceFileIds])];
+      const candidates = grouped.get(key) ?? [];
+      candidates.push({ record: canonicalRecord, fileId: entry.file.meta.id, fileName: entry.file.meta.name, fileIndex });
+      grouped.set(key, candidates);
+    }
+    perFileRecords.set(entry.file.meta.id, list);
+  });
+
+  /** one merged record per employee-day; nothing is double-counted */
+  const recordByKey = new Map<string, AttendanceRecord>();
+  const mergeDecisions: MergeDecision[] = [];
+
+  for (const [key, candidates] of grouped) {
+    const decision = candidates.length > 1 ? chooseRecord(candidates, preference) : null;
+    const winner = decision ? candidates.find((entry) => entry.fileId === decision.usedFileId)! : candidates[0];
+    const sources =
+      decision && decision.usedFileId === preference.primaryAttendanceSource
+        ? [winner] // an explicit primary source is authoritative for this day
+        : candidates;
+
+    const merged: AttendanceRecord = {
+      ...winner.record,
+      key,
+      employeeId: winner.record.employeeId,
+      cells: sources.flatMap((entry) => entry.record.cells),
+      punches: sources.flatMap((entry) => entry.record.punches),
+      markers: [...new Set(sources.flatMap((entry) => entry.record.markers))],
+      parseWarnings: [...new Set(sources.flatMap((entry) => entry.record.parseWarnings))],
+      sourceFileIds: [...new Set(candidates.flatMap((entry) => entry.record.sourceFileIds))],
+    };
+    recordByKey.set(key, merged);
+
+    if (decision && candidates.length > 1) {
+      const conflictNote =
+        candidates.length > 1 && sources.length === 1
+          ? `The other file(s) also contain this day: ${candidates
+              .filter((entry) => entry.fileId !== decision.usedFileId)
+              .map((entry) => entry.fileName)
+              .join(', ')} — their values were not used because you selected a primary source.`
+          : 'Both files contain this day; the punches were merged and de-duplicated by time.';
+      mergeDecisions.push({ ...decision, reason: `${decision.reason} ${conflictNote}` });
     }
   }
 
@@ -542,12 +623,45 @@ export function mergeAttendance(
     employees: canonical,
     records,
     attendanceFiles: results.map((entry) => entry.result.summary),
+    perFileRecords,
+    mergeDecisions,
   };
 }
 
 /* ------------------------------------------------------------------ *
  * Validation & review centre
  * ------------------------------------------------------------------ */
+
+/** One parsed WhatsApp message, rendered as readable key/value lines (spec 46). */
+function describeParsedMessage(message: WhatsAppMessage): string {
+  const lines = [
+    `Date: ${message.date ?? 'not recognised'}${message.dateText ? ` (as written: "${message.dateText}")` : ''}`,
+    `Time: ${message.timeText ?? 'not recognised'}`,
+    `Sender: ${message.sender ?? '— none (system line)'}`,
+    `Message: ${message.raw.replace(/\n/g, ' ⏎ ')}`,
+  ];
+  if (message.classification.audience !== 'uncertain') {
+    lines.push(`Classified as: ${message.classification.audience}`);
+  }
+  if (message.parseWarnings.length > 0) lines.push(`Parsing notes: ${message.parseWarnings.join(' ')}`);
+  return lines.join('\n');
+}
+
+/** One parsed attendance record, rendered as readable key/value lines (spec 46). */
+function describeParsedRecord(record: AttendanceRecord): string {
+  const cells = record.cells
+    .map((cell) => `"${cell.raw}"${cell.punches.length > 0 ? ` → ${cell.punches.map((punch) => punch.text).join(', ')}` : ''}`)
+    .join(' | ');
+  const lines = [
+    `Date: ${record.date}`,
+    `Punches read: ${record.punches.map((punch) => punch.text).join(', ') || 'none'}`,
+    `First / last: ${record.firstPunch ?? '—'} / ${record.lastPunch ?? '—'} (minutes of day)`,
+    `Cells: ${cells || '—'}`,
+  ];
+  if (record.markers.length > 0) lines.push(`Markers: ${record.markers.join(', ')}`);
+  if (record.parseWarnings.length > 0) lines.push(`Parsing notes: ${record.parseWarnings.join(' ')}`);
+  return lines.join('\n');
+}
 
 function buildValidation(params: {
   files: AnalysisInputFile[];
@@ -560,6 +674,8 @@ function buildValidation(params: {
     unparsed: { lineNumber: number; raw: string; reason: string }[];
     detectedDateOrder: 'MDY' | 'DMY';
     orderAmbiguous: boolean;
+    warnings: string[];
+    diagnostics: WhatsAppParseDiagnostics;
   }[];
   messages: WhatsAppMessage[];
   employees: AttendanceEmployee[];
@@ -592,31 +708,128 @@ function buildValidation(params: {
   let issueCounter = 0;
   const issueId = (prefix: string) => `${prefix}-${(issueCounter += 1)}`;
 
-  /* --- files --- */
+  /* --- files: detection AND parsing are reported separately (spec 38/45/46/49) --- */
   const fileReports = files.map((file) => {
     const kind = file.meta.kindOverride ?? file.meta.kind;
     const whatsapp = whatsappResults.find((result) => result.file.meta.id === file.meta.id);
     const attendance = attendanceResults.find((result) => result.file.meta.id === file.meta.id);
-    const recordsParsed = whatsapp
-      ? whatsapp.messages.filter((message) => !message.isSystem).length
-      : (attendance?.result.summary.recordCount ?? 0);
-    const fileWarnings: string[] = [];
+    const previewRaw = String(file.text ?? '')
+      .replace(/\r\n?/g, '\n')
+      .split('\n')
+      .slice(0, 20)
+      .map((line) => line.slice(0, 200));
+
     if (whatsapp) {
+      const messagesForFile = whatsapp.messages.filter((message) => !message.isSystem);
+      const staff = messagesForFile.filter((message) => message.classification.audience === 'staff').length;
+      const student = messagesForFile.filter((message) => message.classification.audience === 'student').length;
+      const uncertain = messagesForFile.filter((message) => message.classification.audience === 'uncertain').length;
+      const dates = messagesForFile
+        .map((message) => message.date)
+        .filter((date): date is string => Boolean(date))
+        .sort(compareIso);
+      const fileWarnings: string[] = [];
       fileWarnings.push(...whatsapp.messages.flatMap((message) => message.parseWarnings));
+      fileWarnings.push(...whatsapp.warnings);
+      return {
+        fileId: file.meta.id,
+        fileName: file.meta.name,
+        kind,
+        confidence: file.meta.detection.confidence,
+        reasons: file.meta.detection.reasons,
+        warnings: [...new Set(fileWarnings)].slice(0, 25),
+        recordsParsed: messagesForFile.length,
+        staffMessages: staff,
+        studentMessages: student,
+        uncertainMessages: uncertain,
+        dateRange: { first: dates[0] ?? null, last: dates.slice(-1)[0] ?? null },
+        previewRaw,
+        previewParsed: whatsapp.messages.slice(0, 20).map(describeParsedMessage),
+        diagnostics: whatsapp.diagnostics,
+        critical: whatsapp.diagnostics.formatMismatch,
+      };
     }
+
     if (attendance) {
-      fileWarnings.push(...attendance.result.warnings);
+      const summaryFile = attendance.result.summary;
+      const dates = attendance.result.records
+        .map((record) => record.date)
+        .sort(compareIso);
+      const fileWarnings = [...attendance.result.warnings];
+      for (const problem of attendance.result.problems) {
+        fileWarnings.push(`${problem.message}${problem.rowNumber ? ` (row ${problem.rowNumber})` : ''}`);
+      }
+      return {
+        fileId: file.meta.id,
+        fileName: file.meta.name,
+        kind,
+        confidence: file.meta.detection.confidence,
+        reasons: file.meta.detection.reasons,
+        warnings: [...new Set(fileWarnings)].slice(0, 25),
+        recordsParsed: summaryFile.recordCount,
+        employees: summaryFile.employeeCount,
+        records: summaryFile.recordCount,
+        punches: summaryFile.punchCount,
+        dateRange: { first: dates[0] ?? null, last: dates.slice(-1)[0] ?? null },
+        previewRaw,
+        previewParsed: attendance.result.records.slice(0, 20).map(describeParsedRecord),
+        critical: false,
+      };
     }
+
     return {
       fileId: file.meta.id,
       fileName: file.meta.name,
       kind,
       confidence: file.meta.detection.confidence,
       reasons: file.meta.detection.reasons,
-      warnings: [...new Set(fileWarnings)].slice(0, 25),
-      recordsParsed,
+      warnings: ['The file was identified but could not be parsed and was not used in the analysis.'],
+      recordsParsed: 0,
+      previewRaw,
+      previewParsed: [],
+      critical: true,
     };
   });
+
+  /* --- WhatsApp files that produced no messages (spec 45) --- */
+  for (const result of whatsappResults) {
+    const parsedMessages = result.messages.filter((message) => !message.isSystem).length;
+    if (parsedMessages === 0) {
+      const sample = result.diagnostics.sampleLines.slice(0, 3).join('\n');
+      pushIssue({
+        id: issueId('waparse'),
+        type: 'unparsed_message',
+        severity: 'high',
+        critical: true,
+        title: 'WhatsApp parsing failed or no messages were recognized',
+        detail:
+          `${result.file.meta.name}: ${result.diagnostics.timestamps} timestamp-like line(s) and ${result.diagnostics.messageBlocks} message block(s) were detected, but no message could be built. ` +
+          (result.diagnostics.formatMismatch
+            ? 'PARSER FORMAT MISMATCH — the file uses a chat structure this parser does not recognise. Supported: [9/1/26, 5:17:33 AM] Name: text · [5:17] **Name:** text · [2026-09-01 05:17] Name: text · 01/09/2026, 05:17 - Name: text · markdown date headings with [time] **Name:** lines.'
+            : 'No timestamp-like lines were found at all — this may not be a chat export.'),
+        sourceFile: result.file.meta.name,
+        raw: sample || undefined,
+        suggestion:
+          result.diagnostics.unrecognisedSamples.length > 0
+            ? `Recognised sample lines: ${sample || 'none'}. First unrecognised line: ${result.diagnostics.unrecognisedSamples[0]}`
+            : 'Re-export the chat, or set the file type manually if it is not a WhatsApp export.',
+      });
+    }
+    for (const entry of result.unparsed.slice(0, 100)) {
+      if (result.diagnostics.formatMismatch) break;
+      pushIssue({
+        id: issueId('unparsed'),
+        type: 'unparsed_message',
+        severity: 'medium',
+        title: 'WhatsApp line could not be parsed',
+        detail: entry.reason,
+        sourceFile: result.file.meta.name,
+        sourceLocation: `line ${entry.lineNumber}`,
+        raw: entry.raw,
+        suggestion: 'Check that this line uses one of the supported export formats, or correct the source file.',
+      });
+    }
+  }
 
   /* --- malformed times --- */
   for (const { file, result } of attendanceResults) {
@@ -827,6 +1040,9 @@ function buildValidation(params: {
     }
   }
 
+  const criticalProblems = problems.filter((issue) => issue.critical);
+  const warningProblems = problems.filter((issue) => !issue.critical);
+
   const validation: ValidationReport = {
     files: fileReports,
     totals: {
@@ -853,6 +1069,8 @@ function buildValidation(params: {
       parseProblems: problems.filter((problem) =>
         ['malformed_time', 'unparsed_message', 'duplicate_record'].includes(problem.type),
       ).length,
+      criticalProblems: criticalProblems.length,
+      warningProblems: warningProblems.length,
     },
     dateRange: { first: summary.attendanceTrend[0]?.date ?? null, last: summary.attendanceTrend.slice(-1)[0]?.date ?? null },
     problems,

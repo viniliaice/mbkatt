@@ -7,6 +7,7 @@ import {
   BarChart3,
   BellRing,
   CalendarCheck,
+  ClipboardCheck,
   FileSpreadsheet,
   Filter,
   LayoutDashboard,
@@ -38,6 +39,15 @@ const NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/upload', label: 'Upload Files', icon: Upload },
   { to: '/audit', label: 'Attendance Audit', icon: CalendarCheck },
+  {
+    to: '/administrative',
+    label: 'Administrative Report',
+    icon: ClipboardCheck,
+    badge: (result) =>
+      result
+        ? result.admin.teacherStats.reduce((sum, teacher) => sum + teacher.fullAbsencesPending, 0) || null
+        : null,
+  },
   { to: '/employees', label: 'Employees', icon: Users },
   { to: '/whatsapp', label: 'WhatsApp Reports', icon: BellRing },
   {

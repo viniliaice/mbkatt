@@ -1,8 +1,22 @@
-import { CalendarOff, Clock, Link2, Plus, RefreshCw, RotateCcw, Save, ShieldCheck, Trash2, UserCog } from 'lucide-react';
+import {
+  CalendarOff,
+  Clock,
+  Layers,
+  Link2,
+  Percent,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  ShieldCheck,
+  Trash2,
+  UserCog,
+} from 'lucide-react';
 import * as React from 'react';
 import { PageHeader } from '@/components/AppShell';
 import { Alert, Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Checkbox, Input, Select, Separator, Switch } from '@/components/ui';
 import { WEEKDAY_NAMES } from '@/lib/dates';
+import { describeAdminRules } from '@/lib/adminReport';
 import { DEFAULT_SETTINGS } from '@/lib/rules';
 import { useStore } from '@/lib/store';
 import type { DateOrder, Settings } from '@/lib/types';
@@ -482,6 +496,244 @@ export function SettingsPage() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
+              <ShieldCheck className="size-4" /> Administrative thresholds
+            </CardTitle>
+            <CardDescription>
+              These thresholds decide the administrative status on the Teacher Attendance Administrative Summary. They
+              are policy settings, not conclusions: each status always shows the exact rule and value that triggered it,
+              and no rule makes a disciplinary decision on its own.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Perfect Attendance — max absences" hint="Days considered: full absences.">
+                <Input
+                  type="number"
+                  min={0}
+                  value={settings.adminRules.perfectMaxAbsences}
+                  onChange={(event) =>
+                    patch({ adminRules: { ...settings.adminRules, perfectMaxAbsences: Number(event.target.value) || 0 } })
+                  }
+                />
+              </Field>
+              <Field label="Perfect Attendance — max late occurrences">
+                <Input
+                  type="number"
+                  min={0}
+                  value={settings.adminRules.perfectMaxLate}
+                  onChange={(event) =>
+                    patch({ adminRules: { ...settings.adminRules, perfectMaxLate: Number(event.target.value) || 0 } })
+                  }
+                />
+              </Field>
+              <Field label="Satisfactory — minimum attendance rate (%)">
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={settings.adminRules.satisfactoryMinRate}
+                  onChange={(event) =>
+                    patch({ adminRules: { ...settings.adminRules, satisfactoryMinRate: Number(event.target.value) || 0 } })
+                  }
+                />
+              </Field>
+              <Field label="Satisfactory — max late occurrences">
+                <Input
+                  type="number"
+                  min={0}
+                  value={settings.adminRules.satisfactoryMaxLate}
+                  onChange={(event) =>
+                    patch({ adminRules: { ...settings.adminRules, satisfactoryMaxLate: Number(event.target.value) || 0 } })
+                  }
+                />
+              </Field>
+              <Field label="Verbal Notice — late occurrences from">
+                <Input
+                  type="number"
+                  min={1}
+                  value={settings.adminRules.verbalNoticeMinLate}
+                  onChange={(event) =>
+                    patch({ adminRules: { ...settings.adminRules, verbalNoticeMinLate: Number(event.target.value) || 1 } })
+                  }
+                />
+              </Field>
+              <Field label="Review Required — late occurrences from">
+                <Input
+                  type="number"
+                  min={1}
+                  value={settings.adminRules.reviewMaxLate}
+                  onChange={(event) =>
+                    patch({ adminRules: { ...settings.adminRules, reviewMaxLate: Number(event.target.value) || 1 } })
+                  }
+                />
+              </Field>
+              <Field label="Review Required — attendance rate below (%)">
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={settings.adminRules.reviewMaxRate}
+                  onChange={(event) =>
+                    patch({ adminRules: { ...settings.adminRules, reviewMaxRate: Number(event.target.value) || 0 } })
+                  }
+                />
+              </Field>
+              <Field label="Review Required — unexcused absences from">
+                <Input
+                  type="number"
+                  min={1}
+                  value={settings.adminRules.reviewMaxUnexcused}
+                  onChange={(event) =>
+                    patch({ adminRules: { ...settings.adminRules, reviewMaxUnexcused: Number(event.target.value) || 1 } })
+                  }
+                />
+              </Field>
+              <Field
+                label="Review Required — total late minutes from"
+                hint="0 disables this rule (it is disabled by default)."
+              >
+                <Input
+                  type="number"
+                  min={0}
+                  value={settings.adminRules.reviewMaxLateMinutes}
+                  onChange={(event) =>
+                    patch({ adminRules: { ...settings.adminRules, reviewMaxLateMinutes: Number(event.target.value) || 0 } })
+                  }
+                />
+              </Field>
+              <Field label="Critical Review — attendance rate below (%)">
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={settings.adminRules.criticalMaxRate}
+                  onChange={(event) =>
+                    patch({ adminRules: { ...settings.adminRules, criticalMaxRate: Number(event.target.value) || 0 } })
+                  }
+                />
+              </Field>
+              <Field label="Critical Review — unexcused absences from">
+                <Input
+                  type="number"
+                  min={1}
+                  value={settings.adminRules.criticalMaxUnexcused}
+                  onChange={(event) =>
+                    patch({ adminRules: { ...settings.adminRules, criticalMaxUnexcused: Number(event.target.value) || 1 } })
+                  }
+                />
+              </Field>
+            </div>
+            <Alert tone="info" title="Rules currently in force">
+              <div className="grid gap-1">
+                {describeAdminRules(settings).map((rule) => (
+                  <p key={rule}>• {rule}</p>
+                ))}
+              </div>
+            </Alert>
+            <Switch
+              label="Estimate late minutes from WhatsApp when the machine has no record"
+              description="Off by default: late minutes are calculated from biometric evidence only. When enabled, a message claiming lateness on a day with no readable punch is used as an estimate — and labelled as estimated everywhere."
+              checked={settings.estimateLateFromWhatsApp}
+              onCheckedChange={(value) => patch({ estimateLateFromWhatsApp: value })}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Percent className="size-4" /> Attendance rate calculation
+            </CardTitle>
+            <CardDescription>
+              Attendance rate = days present ÷ expected working days. Choose what is excluded from the calculation
+              (spec: an excused or approved day should not count against a teacher).
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <Switch
+              label="Exclude approved leave"
+              description="Days marked as Approved Leave by an administrator."
+              checked={settings.attendanceRate.excludeApprovedLeave}
+              onCheckedChange={(value) =>
+                patch({ attendanceRate: { ...settings.attendanceRate, excludeApprovedLeave: value } })
+              }
+            />
+            <Switch
+              label="Exclude excused full-day absences"
+              description="Days an administrator confirmed as Excused."
+              checked={settings.attendanceRate.excludeExcusedAbsence}
+              onCheckedChange={(value) =>
+                patch({ attendanceRate: { ...settings.attendanceRate, excludeExcusedAbsence: value } })
+              }
+            />
+            <Switch
+              label="Exclude official school holidays"
+              description={`${settings.holidayDates.length} holiday date(s) configured below.`}
+              checked={settings.attendanceRate.excludeHolidays}
+              onCheckedChange={(value) => patch({ attendanceRate: { ...settings.attendanceRate, excludeHolidays: value } })}
+            />
+            <Switch
+              label="Exclude weekends"
+              description="Fridays (and any other configured weekend day) are never counted as absences."
+              checked={settings.attendanceRate.excludeWeekends}
+              onCheckedChange={(value) => patch({ attendanceRate: { ...settings.attendanceRate, excludeWeekends: value } })}
+            />
+            <Switch
+              label="Exclude other approved non-working days"
+              description="Extra working days that were cancelled, closures and similar approved exceptions."
+              checked={settings.attendanceRate.excludeOtherApproved}
+              onCheckedChange={(value) =>
+                patch({ attendanceRate: { ...settings.attendanceRate, excludeOtherApproved: value } })
+              }
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Layers className="size-4" /> Attendance source (duplicate files)
+            </CardTitle>
+            <CardDescription>
+              When two uploaded files describe the same period, this decides which values are used. The upload screen
+              shows what the files appear to be and which source was used for each overlapping day.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Field label="Source used for the calculation">
+              <Select
+                value={settings.primaryAttendanceSource}
+                onChange={(event) => patch({ primaryAttendanceSource: event.target.value })}
+              >
+                <option value="auto">Automatic — most complete record per day</option>
+                <option value="both">Use both files (merge and de-duplicate punches)</option>
+                {(result?.attendanceFiles ?? []).map((summary) => (
+                  <option key={summary.fileId} value={summary.fileId}>
+                    {summary.fileName} is primary
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            {result?.sourceComparison?.length ? (
+              <ul className="space-y-2 text-sm text-[var(--muted-foreground)]">
+                {result.sourceComparison.map((comparison) => (
+                  <li key={comparison.fileIds.join('-')} className="rounded-lg border border-[var(--border)] p-3">
+                    <p className="font-medium text-[var(--foreground)]">{comparison.relationLabel}</p>
+                    <p>{comparison.explanation}</p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-[var(--muted-foreground)]">
+                Upload two or more attendance files to compare them. Nothing is double-counted either way.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
               <ShieldCheck className="size-4" /> Privacy &amp; branding
             </CardTitle>
             <CardDescription>How the app stores data and what appears on exported reports.</CardDescription>
@@ -529,6 +781,18 @@ export function SettingsPage() {
                 <li>
                   Matching: matched ≥ {settings.matchedThreshold}%, possible ≥ {settings.possibleThreshold}%
                   {settings.useTransliterationVariants ? ', spelling variants on' : ', spelling variants off'}
+                </li>
+                <li>
+                  Administrative: Perfect at ≤ {settings.adminRules.perfectMaxAbsences} absences and ≤{' '}
+                  {settings.adminRules.perfectMaxLate} late; Satisfactory at ≥ {settings.adminRules.satisfactoryMinRate}%
+                  and ≤ {settings.adminRules.satisfactoryMaxLate} late; Verbal Notice from{' '}
+                  {settings.adminRules.verbalNoticeMinLate} late; Review Required below {settings.adminRules.reviewMaxRate}%,
+                  from {settings.adminRules.reviewMaxUnexcused} unexcused absence(s) or {settings.adminRules.reviewMaxLate}{' '}
+                  late; Critical Review below {settings.adminRules.criticalMaxRate}% or from{' '}
+                  {settings.adminRules.criticalMaxUnexcused} unexcused absence(s).
+                </li>
+                <li>
+                  Late minutes: {settings.estimateLateFromWhatsApp ? 'estimated from WhatsApp when there is no biometric record' : 'biometric evidence only'}.
                 </li>
                 <li>Defaults from the app at load: late {DEFAULT_SETTINGS.defaultLateCutoff}, Thursday {DEFAULT_SETTINGS.lateCutoffByWeekday[4]}, weekend Friday.</li>
               </ul>
